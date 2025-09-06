@@ -1,34 +1,69 @@
-"""
-URL configuration for claro_project project.
-
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/5.2/topics/http/urls/
-Examples:
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  path('', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
-Including another URLconf
-    1. Import the include() function: from django.urls import include, path
-    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
-"""
 from django.contrib import admin
 from django.urls import path, include
+from django.http import JsonResponse
 from rest_framework import routers
-from usuarios import views
+
+from django.conf import settings
+from django.conf.urls.static import static
+
+# Vistas de apps
+from usuarios import views as usuarios_views
+from usuarios.auth_views import RegisterView, LoginView, MeView
+from rest_framework_simplejwt.views import TokenRefreshView
+
+from asignaciones.views import DireccionAsignadaViewSet
+from auditoria.views import AuditoriaVisitaViewSet, IssueViewSet
+
+# Docs (drf-spectacular)
+from drf_spectacular.views import (
+    SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
+)
 
 router = routers.DefaultRouter()
-router.register(r'usuarios', views.UsuarioViewSet)
-router.register(r'tecnicos', views.TecnicoViewSet)
-router.register(r'visitas', views.VisitaViewSet)
-router.register(r'reagendamientos', views.ReagendamientoViewSet)
-router.register(r'historial', views.HistorialVisitaViewSet)
-router.register(r'evidencias', views.EvidenciaServicioViewSet)
+
+# usuarios (legacy + admin)
+router.register(r'usuarios', usuarios_views.UsuarioViewSet)
+router.register(r'tecnicos', usuarios_views.TecnicoViewSet)
+router.register(r'visitas', usuarios_views.VisitaViewSet)
+router.register(r'reagendamientos', usuarios_views.ReagendamientoViewSet)
+router.register(r'historial', usuarios_views.HistorialVisitaViewSet)
+router.register(r'evidencias', usuarios_views.EvidenciaServicioViewSet)
+
+# nuevas
+router.register(r'asignaciones', DireccionAsignadaViewSet, basename='asignaciones')
+router.register(r'auditorias',   AuditoriaVisitaViewSet,   basename='auditorias')
+router.register(r'issues',       IssueViewSet,             basename='issues')
 
 urlpatterns = [
+    # Home / health
+    path('', lambda r: JsonResponse({
+        'name': 'ClaroVTR API',
+        'version': '1.0',
+        'api_root': '/api/',
+        'auth': {'register': '/auth/register', 'login': '/auth/login', 'me': '/auth/me'}
+    }), name='home'),
+
+    # Admin
     path('admin/', admin.site.urls),
-    path('api/', include(router.urls)),  # ← ¡Esta línea activa /api/
+
+    # API REST
+    path('api/', include(router.urls)),
+
+    # Auth (HU-1/HU-3)
+    path('auth/register', RegisterView.as_view(), name='auth-register'),
+    path('auth/login',    LoginView.as_view(),    name='auth-login'),
+    path('auth/refresh',  TokenRefreshView.as_view(), name='auth-refresh'),
+    path('auth/me',       MeView.as_view(),       name='auth-me'),
+
+    # DRF login de sesión (opcional)
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')),
+
+    # === Documentación OpenAPI/Swagger/ReDoc ===
+    path('schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('docs/',   SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    path('redoc/',  SpectacularRedocView.as_view(url_name='schema'),   name='redoc'),
 ]
+
+# Media (fotos)
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
