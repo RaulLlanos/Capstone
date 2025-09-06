@@ -8,6 +8,7 @@ import { useAuth } from "../context/AuthContext";
 import Login from "../pages/Login";
 import Tecnico from "../pages/Tecnico";
 import Auditor from "../pages/Auditor";
+import Registro from "../pages/Registro";
 import Layout from "../components/Layout";
 
 function PrivateRoute() {
@@ -19,6 +20,7 @@ function PrivateRoute() {
 
 const router = createBrowserRouter([
   { path: "/login", element: <Login /> },
+  { path: "/registro", element: <Registro /> },
   {
     element: <PrivateRoute />,
     children: [

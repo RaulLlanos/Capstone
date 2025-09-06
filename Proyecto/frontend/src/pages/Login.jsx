@@ -77,9 +77,9 @@ export default function Login() {
               Entrar
             </button>
             <div className={styles.helper}>
-              <span>¿Olvidaste tu contraseña?</span>
-              <a className={styles.link} href="#">
-                Recuperar
+              <span>¿No tienes cuenta?</span>
+              <a className={styles.link} href="/registro">
+                Registrarse
               </a>
             </div>
           </div>
