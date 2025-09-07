@@ -8,8 +8,7 @@ from django.conf.urls.static import static
 
 # Vistas de apps
 from usuarios import views as usuarios_views
-from usuarios.auth_views import RegisterView, LoginView, MeView
-from rest_framework_simplejwt.views import TokenRefreshView
+from usuarios.auth_views import RegisterView, LoginView, MeView, LogoutView, RefreshCookieView
 
 from asignaciones.views import DireccionAsignadaViewSet
 from auditoria.views import AuditoriaVisitaViewSet, IssueViewSet
@@ -52,7 +51,8 @@ urlpatterns = [
     # Auth (HU-1/HU-3)
     path('auth/register', RegisterView.as_view(), name='auth-register'),
     path('auth/login',    LoginView.as_view(),    name='auth-login'),
-    path('auth/refresh',  TokenRefreshView.as_view(), name='auth-refresh'),
+    path('auth/refresh',  RefreshCookieView.as_view(), name='auth-refresh'),
+    path('auth/logout',   LogoutView.as_view(),   name='auth-logout'), 
     path('auth/me',       MeView.as_view(),       name='auth-me'),
 
     # DRF login de sesión (opcional)

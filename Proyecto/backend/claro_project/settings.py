@@ -1,3 +1,4 @@
+# claro_project/settings.py
 from pathlib import Path
 from datetime import timedelta
 
@@ -22,7 +23,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'django_filters',
     'corsheaders',
-    'drf_spectacular',  # <= agregado
+    'drf_spectacular',   # 📘 OpenAPI/Swagger
 
     # Apps del proyecto
     'usuarios',
@@ -32,7 +33,7 @@ INSTALLED_APPS = [
 
 AUTH_USER_MODEL = 'usuarios.Usuario'
 
-# === Middleware (CORS va arriba, antes de CommonMiddleware) ===
+# === Middleware (CORS debe ir antes de CommonMiddleware) ===
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
 
@@ -49,7 +50,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-# === CORS / CSRF para el front (Vite/React) ===
+# === CORS/CSRF para permitir cookies desde el front ===
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
@@ -62,8 +63,7 @@ CSRF_TRUSTED_ORIGINS = [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
 ]
-# Si usas cookies/sesión desde el front:
-# CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_CREDENTIALS = True  # ← necesario para enviar cookies
 
 # === URLS / WSGI ===
 ROOT_URLCONF = 'claro_project.urls'
@@ -85,19 +85,15 @@ TEMPLATES = [
     },
 ]
 
-# === Base de datos (MySQL) ===
+# === Base de datos: PostgreSQL ===
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'db_claro',
-        'USER': 'root',
-        'PASSWORD': '150713.Ydj',
-        'HOST': 'localhost',
-        'PORT': '3306',
-        'OPTIONS': {
-            'charset': 'utf8mb4',
-            'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
-        },
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "db_claro",
+        "USER": "claro_user",
+        "PASSWORD": "Claro_2025_pg",   # tu clave
+        "HOST": "127.0.0.1",
+        "PORT": "5432",
     }
 }
 
@@ -122,11 +118,30 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# === DRF + JWT ===
+# === JWT (SimpleJWT): access corto, refresh largo ===
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
+    'AUTH_HEADER_TYPES': ('Bearer',),
+}
+
+# --- Cookies para JWT (para autenticación vía cookie HttpOnly) ---
+JWT_AUTH_COOKIE = 'access'       # nombre de la cookie de access
+JWT_AUTH_REFRESH_COOKIE = 'refresh'
+JWT_COOKIE_SAMESITE = 'Lax'      # en prod, si front/back son dominios distintos: 'None'
+JWT_COOKIE_SECURE = False        # en prod True (HTTPS)
+JWT_COOKIE_PATH = '/'
+JWT_COOKIE_DOMAIN = None         # en prod: tu dominio, ej. ".midominio.com"
+
+# === DRF ===
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
+        # 1) Primero: lee JWT desde cookie (usuarios/auth_cookie.py)
+        'usuarios.auth_cookie.CookieJWTAuthentication',
+        # 2) Soporte para Authorization: Bearer ...
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-        'rest_framework.authentication.SessionAuthentication',  # útil para /admin y browsable API
+        # 3) Sesión (útil para /admin y browsable API)
+        'rest_framework.authentication.SessionAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
@@ -141,18 +156,19 @@ REST_FRAMEWORK = {
         'rest_framework.parsers.MultiPartParser',
         'rest_framework.parsers.FormParser',
     ),
-    # Paginación (opcional pero recomendado)
+    # Paginación
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 50,
 
-    # <= agregado: esquema OpenAPI para drf-spectacular
+    # OpenAPI/Swagger con drf-spectacular
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
-SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=6),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
-    'AUTH_HEADER_TYPES': ('Bearer',),
+# === drf-spectacular (OpenAPI) ===
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'ClaroVTR API',
+    'DESCRIPTION': 'API para asignaciones y auditorías',
+    'VERSION': '1.0.0',
 }
 
 # === Hash de contraseñas (bcrypt primero) ===
@@ -162,18 +178,12 @@ PASSWORD_HASHERS = [
     'django.contrib.auth.hashers.PBKDF2PasswordHasher',  # compatibilidad
 ]
 
-# === Backends de autenticación (email o local-part) ===
+# === Backends de autenticación (email o “local-part”) ===
 AUTHENTICATION_BACKENDS = [
-    'usuarios.backends.EmailOrLocalBackend',     # nuestro backend custom
+    'usuarios.backends.EmailOrLocalBackend',     # backend custom
     'django.contrib.auth.backends.ModelBackend', # fallback
 ]
 
-# === drf-spectacular settings ===
-SPECTACULAR_SETTINGS = {
-    'TITLE': 'ClaroVTR API',
-    'DESCRIPTION': 'API para asignaciones y auditorías',
-    'VERSION': '1.0.0',
-}
-
-DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024      # 10 MB por request
-FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024      # 10 MB por archivo
+# Límites de subida (coinciden con validación de fotos)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB por request
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB por archivo
