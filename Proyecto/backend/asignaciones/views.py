@@ -52,7 +52,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, AdminAuditorFull_TechReadOnlyPlusActions]
     parser_classes = (JSONParser, MultiPartParser, FormParser)
 
-    # define las acciones que puede usar el técnico (leídas por el permiso)
     tech_allowed_actions = {'asignarme', 'estado_cliente', 'reagendar', 'cerrar'}
 
     filterset_fields = [
@@ -165,7 +164,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         obj = self.get_object()
         u = request.user
 
-        # Técnico: solo si es el asignado; admin/auditor: libre
         if getattr(u, 'rol', None) == 'tecnico' and obj.asignado_a_id != u.id:
             return Response({'detail': 'No autorizado.'}, status=403)
 
@@ -236,7 +234,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         obj = self.get_object()
         u = request.user
 
-        # Técnico: solo si es el asignado; admin/auditor: libre
         if getattr(u, 'rol', None) == 'tecnico' and obj.asignado_a_id != u.id:
             return Response({'detail': 'Solo el técnico asignado o admin/auditor puede operar.'}, status=403)
 

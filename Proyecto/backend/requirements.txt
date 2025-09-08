@@ -1,6 +1,7 @@
 asgiref==3.9.1
 attrs==25.3.0
 bcrypt==4.3.0
+dj-database-url==3.0.1
 Django==5.2.6
 django-cors-headers==4.7.0
 django-filter==25.1

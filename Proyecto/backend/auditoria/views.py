@@ -4,7 +4,6 @@ from rest_framework.permissions import IsAuthenticated, BasePermission, SAFE_MET
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from drf_spectacular.utils import extend_schema
 
 from .models import AuditoriaVisita, Issue
 from .serializers import AuditoriaVisitaSerializer, IssueSerializer
@@ -12,9 +11,8 @@ from .serializers import AuditoriaVisitaSerializer, IssueSerializer
 
 class MixedRolePolicy(BasePermission):
     """
-    Auditor/Admin: full CRUD.
-    Técnico: GET/HEAD/OPTIONS y POST (crear auditoría). No puede borrar ni actualizar auditorías ajenas.
-    Regla adicional en perform_create: un técnico solo puede crear sobre su propia asignación.
+    Admin/Auditor: CRUD completo.
+    Técnico: solo GET/HEAD/OPTIONS y POST (crear auditoría o subir fotos de su propia asignación).
     """
     def has_permission(self, request, view):
         u = getattr(request, "user", None)
@@ -37,26 +35,14 @@ class AuditoriaVisitaViewSet(viewsets.ModelViewSet):
     search_fields = ['direccion_cliente', 'rut_cliente', 'id_vivienda', 'nombre_auditor']
 
     def perform_create(self, serializer):
-        """
-        - Si es técnico, solo puede crear auditoría sobre una asignación que esté asignada a él.
-        - Se persiste snapshot desde la asignación (lo hace el serializer.create()).
-        """
-        u = self.request.user
-        asignacion = self.request.data.get('asignacion')
-        if getattr(u, 'rol', None) == 'tecnico':
-            # DRF ya resolverá la FK, pero validamos temprano con instancia cargada:
-            if not serializer.initial_data.get('asignacion'):
-                raise ValueError("Falta 'asignacion'.")
-            # El serializer.validated_data tiene la instancia; validamos en validate() también.
+        # El serializer.validate() asegura que, si es técnico, la asignación es suya.
         serializer.save()
 
-    @extend_schema(summary="Subir fotos a una auditoría existente")
     @action(detail=True, methods=['post'], url_path='upload_fotos')
     def upload_fotos(self, request, pk=None):
         obj = self.get_object()
         u = request.user
 
-        # Permiso: técnico asignado o auditor/admin
         if getattr(u, 'rol', None) == 'tecnico' and obj.asignacion.asignado_a_id != u.id:
             return Response({'detail': 'No autorizado.'}, status=403)
 
@@ -79,10 +65,14 @@ class AuditoriaVisitaViewSet(viewsets.ModelViewSet):
         if f3: obj.foto_3 = f3
         obj.save()
 
-        return Response(AuditoriaVisitaSerializer(obj, context={'request': request}).data)
+        return Response(AuditoriaVisitaSerializer(obj, context={'request': request}).data, status=200)
 
 
 class IssueViewSet(viewsets.ModelViewSet):
+    """
+    Admin/Auditor: CRUD completo.
+    Técnico: lectura y creación de issues ligados a auditorías de SU asignación.
+    """
     queryset = Issue.objects.all().order_by('id')
     serializer_class = IssueSerializer
     permission_classes = [IsAuthenticated, MixedRolePolicy]

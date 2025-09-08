@@ -1,9 +1,6 @@
 # core/permissions.py
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
-def is_admin_or_auditor(user):
-    return getattr(user, "rol", None) in ("admin", "auditor")
-
 class AdminAuditorFull_TechReadOnly(BasePermission):
     """
     - Admin/Auditor: full access
