@@ -76,12 +76,6 @@ export default function Login() {
             <button type="submit" className={styles.button}>
               Entrar
             </button>
-            <div className={styles.helper}>
-              <span>¿Olvidaste tu contraseña?</span>
-              <a className={styles.link} href="#">
-                Recuperar
-              </a>
-            </div>
           </div>
         </form>
       </div>

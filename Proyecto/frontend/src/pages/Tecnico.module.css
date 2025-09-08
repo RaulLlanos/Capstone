@@ -1,0 +1,131 @@
+.wrapper {
+  display: grid;
+  gap: 16px;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.title {
+  margin: 0;
+  font-size: 22px;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #eaeaea;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.input, .select {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  outline: none;
+  font-size: 14px;
+}
+.input:focus, .select:focus {
+  border-color: #FF2315;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.btn {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.btn:hover { filter: brightness(0.90); }
+.btn:active { transform: translateY(1px); }
+
+.btnPrimary {
+  background: #FF2315;
+  color: #fff;
+  border-color: #FF2315;
+}
+
+.tableWrap {
+  overflow: auto;
+  border: 1px solid #f0f0f0;
+  border-radius: 10px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.th, .td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid #f7f7f7;
+  white-space: nowrap;
+}
+
+.thead {
+  position: sticky;
+  top: 0;
+  background: #fafafa;
+  z-index: 1;
+  border-bottom: 1px solid #eee;
+}
+
+.rowHighlight {
+  background: rgba(255, 215, 0, 0.18);
+  transition: background 0.2s ease;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.tagProgramada { background: #eef2ff; color: #3730a3; }
+.tagEnCurso    { background: #ecfeff; color: #155e75; }
+.tagCompletada { background: #ecfdf5; color: #065f46; }
+.tagCancelada  { background: #fef2f2; color: #991b1b; }
+
+.empty {
+  text-align: center;
+  color: #6b7280;
+  padding: 24px;
+}
+
+.sectionTitle {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.quickRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
