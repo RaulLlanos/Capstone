@@ -8,8 +8,11 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 
+from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse
+
 from .auth_serializers import RegisterSerializer
 from .models import Usuario
+from .auth_docs_serializers import RegisterDocSerializer, LoginDocSerializer, MeDocSerializer  # <—
 
 # ---------- Helpers para cookies ----------
 def _set_cookie(response, name, value, max_age_seconds: int):
@@ -32,7 +35,28 @@ def _delete_cookie(response, name: str):
         samesite=getattr(settings, 'JWT_COOKIE_SAMESITE', 'Lax'),
     )
 
-# ---------- Registro (igual al tuyo) ----------
+# ---------- Registro ----------
+@extend_schema(
+    summary="Registro de usuario",
+    request=RegisterDocSerializer,
+    responses={
+        201: MeDocSerializer,
+        400: OpenApiResponse(description="Datos inválidos"),
+    },
+    examples=[
+        OpenApiExample(
+            "Ejemplo registro técnico",
+            value={
+                "email": "tecnico@acme.cl",
+                "password": "Secreta123!",
+                "first_name": "Jorge",
+                "last_name": "López",
+                "rut_usuario": "12.345.678-9",
+                "rol": "tecnico"
+            }
+        )
+    ]
+)
 class RegisterView(APIView):
     permission_classes = [AllowAny]
 
@@ -49,13 +73,27 @@ class RegisterView(APIView):
         }, status=status.HTTP_201_CREATED)
 
 # ---------- Login con cookies HttpOnly ----------
+@extend_schema(
+    summary="Login (cookies HttpOnly)",
+    description=(
+        "Acepta 3 formatos:\n"
+        "- {\"email\":\"...\",\"password\":\"...\"}\n"
+        "- {\"username\":\"localpart\",\"password\":\"...\"}  # parte antes del @\n"
+        "- {\"login\":\"...\",\"password\":\"...\"}           # email o local-part\n\n"
+        "Guarda cookies `access` y `refresh`."
+    ),
+    request=LoginDocSerializer,
+    responses={
+        200: MeDocSerializer,
+        401: OpenApiResponse(description="Credenciales inválidas"),
+    },
+    examples=[
+        OpenApiExample("Login con email", value={"email": "tecnico@acme.cl", "password": "Secreta123!"}),
+        OpenApiExample("Login con local-part", value={"username": "tecnico", "password": "Secreta123!"}),
+        OpenApiExample("Login genérico", value={"login": "tecnico@acme.cl", "password": "Secreta123!"}),
+    ]
+)
 class LoginView(APIView):
-    """
-    Acepta:
-    - {"email": "...", "password": "..."}
-    - {"username": "localpart", "password": "..."}  # parte antes del @
-    - {"login": "...", "password": "..."}           # email o localpart
-    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -65,14 +103,12 @@ class LoginView(APIView):
         if not login or not password:
             raise AuthenticationFailed('Faltan credenciales.')
 
-        # Si mandan local-part (“jorge”), resolvemos email único
         if '@' not in login:
             qs = Usuario.objects.filter(email__istartswith=f"{login}@")
             if qs.count() != 1:
                 raise AuthenticationFailed('Usuario ambiguo o inexistente. Usa el email completo.')
             login = qs.first().email
 
-        # Tu backend EmailOrLocalBackend soporta email/local-part
         user = authenticate(request, username=login, password=password)
         if not user or not user.is_active:
             return Response({'detail': 'Credenciales inválidas.'}, status=401)
@@ -95,9 +131,15 @@ class LoginView(APIView):
         _set_cookie(resp, getattr(settings, 'JWT_AUTH_REFRESH_COOKIE', 'refresh'), str(refresh), refresh_s)
         return resp
 
-# ---------- Refresh de access leyendo refresh cookie ----------
+# ---------- Refresh ----------
+@extend_schema(
+    summary="Refresh (renueva access desde refresh cookie)",
+    responses={
+        200: OpenApiResponse(description="Access renovado"),
+        401: OpenApiResponse(description="Falta o es inválido el refresh"),
+    }
+)
 class RefreshCookieView(APIView):
-    """Renueva el access leyendo el refresh desde cookie HttpOnly."""
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -105,7 +147,6 @@ class RefreshCookieView(APIView):
         raw_refresh = request.COOKIES.get(refresh_cookie_name)
         if not raw_refresh:
             return Response({'detail': 'Falta refresh cookie.'}, status=401)
-
         try:
             refresh = RefreshToken(raw_refresh)
             access = refresh.access_token
@@ -117,9 +158,12 @@ class RefreshCookieView(APIView):
         _set_cookie(resp, getattr(settings, 'JWT_AUTH_COOKIE', 'access'), str(access), access_s)
         return resp
 
-# ---------- Logout: borra cookies ----------
+# ---------- Logout ----------
+@extend_schema(
+    summary="Logout (limpia cookies)",
+    responses={204: OpenApiResponse(description="Sin contenido")}
+)
 class LogoutView(APIView):
-    """Cierra sesión: borra cookies de access y refresh."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -128,7 +172,11 @@ class LogoutView(APIView):
         _delete_cookie(resp, getattr(settings, 'JWT_AUTH_REFRESH_COOKIE', 'refresh'))
         return resp
 
-# ---------- Me (igual al tuyo) ----------
+# ---------- Me ----------
+@extend_schema(
+    summary="Perfil actual (por cookies)",
+    responses={200: MeDocSerializer}
+)
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):

@@ -4,6 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, BasePermission, SAFE_METHODS
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
+from core.permissions import AdminAuditorFull_TechReadOnlyPlusActions
 
 from django.db import transaction
 from django.utils.dateparse import parse_date
@@ -17,6 +18,8 @@ from drf_spectacular.utils import (
 from .models import DireccionAsignada, EstadoAsignacion
 from .serializers import DireccionAsignadaSerializer
 from usuarios.models import Usuario
+
+
 
 
 class MixedRolePolicy(BasePermission):
@@ -37,7 +40,6 @@ class MixedRolePolicy(BasePermission):
             allowed_actions = {'asignarme', 'reagendar', 'cerrar'}
             if request.method == 'POST' and getattr(view, 'action', None) in allowed_actions:
                 return True
-            # NO permitir create/update/delete ni otras acciones
             return False
 
         return False
@@ -248,9 +250,9 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             }
         }
     )
+        # asignaciones/views.py  (dentro de DireccionAsignadaViewSet.prefill)
     @action(detail=True, methods=['get'], url_path='prefill')
     def prefill(self, request, pk=None):
-        """Datos para precargar en el front: técnicos, cliente, marca/tecnología, choices."""
         obj = self.get_object()
 
         tecnicos = list(
@@ -260,6 +262,13 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         )
 
         return Response({
+            "tecnico_actual": (
+                {
+                    "id": obj.asignado_a.id,
+                    "nombre": f"{obj.asignado_a.first_name} {obj.asignado_a.last_name}",
+                    "email": obj.asignado_a.email,
+                } if obj.asignado_a else None
+            ),
             "tecnicos": [
                 {
                     "id": t["id"],
@@ -274,19 +283,21 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             },
             "marca": obj.marca,
             "tecnologia": obj.tecnologia,
+            # choices para que el front pinte exactamente los 6 radios del “Estado del Cliente”
             "estado_cliente_choices": [
-                {"value": "autoriza", "label": "Autoriza a ingresar"},
+                {"value": "autoriza",      "label": "Autoriza a ingresar"},
                 {"value": "sin_moradores", "label": "Sin Moradores"},
-                {"value": "rechaza", "label": "Rechaza"},
-                {"value": "contingencia", "label": "Contingencia externa"},
-                {"value": "masivo", "label": "Incidencia Masivo ClaroVTR"},
-                {"value": "reagendo", "label": "Reagendó"}
+                {"value": "rechaza",       "label": "Rechaza"},
+                {"value": "contingencia",  "label": "Contingencia externa"},
+                {"value": "masivo",        "label": "Incidencia Masivo ClaroVTR"},
+                {"value": "reagendo",      "label": "Reagendó"},
             ],
             "bloques": [
                 {"value": "10-13", "label": "10:00 a 13:00"},
                 {"value": "14-18", "label": "14:00 a 18:00"},
             ]
         })
+
 
     @extend_schema(
         summary="Cerrar visita sin auditoría",
