@@ -32,17 +32,6 @@ export default function Layout({ children }) {
           <Link to={home}>
             <img src={logo} alt="logo" style={{ height: 32 }} />
           </Link>
-
-          {/* Mostrar solo el link que corresponde */}
-          {role === "tecnico" && <Link to="/tecnico">Técnico</Link>}
-          {role === "auditor" && <Link to="/auditor">Auditor</Link>}
-          {role === "admin" && (
-            <>
-              <Link to="/tecnico">Técnico</Link>
-              <Link to="/auditor">Auditor</Link>
-              <Link to="/admin-usuarios">Admin Usuarios</Link>
-            </>
-          )}
         </nav>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>

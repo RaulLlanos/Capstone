@@ -10,6 +10,7 @@ import Tecnico from "../pages/Tecnico";
 import Auditor from "../pages/Auditor";
 import Registro from "../pages/Registro";
 import Layout from "../components/Layout";
+import PublicLayout from "../components/PublicLayout";
 
 function PrivateRoute() {
   const { user, loading } = useAuth();
@@ -19,8 +20,18 @@ function PrivateRoute() {
 }
 
 const router = createBrowserRouter([
-  { path: "/login", element: <Login /> },
-  { path: "/registro", element: <Registro /> },
+  { path: "/login", 
+    element:
+    <PublicLayout> 
+      <Login /> 
+    </PublicLayout>
+  },
+  { path: "/registro", 
+    element: 
+    <PublicLayout>
+      <Registro /> 
+    </PublicLayout>
+  },
   {
     element: <PrivateRoute />,
     children: [

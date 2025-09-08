@@ -1,13 +1,19 @@
+// src/pages/Tecnico.jsx
 import { useEffect, useMemo, useState } from "react";
+import styles from "./Tecnico.module.css";
 import Table from "../components/Table";
-import {
-  ESTADOS,
-  getVisitasDeHoy,
-  cambiarEstado,
-  reagendarVisita,
-} from "../services/mockVisits";
 
-// Claves para localStorage
+// Usa tus services reales si ya conectaste backend:
+import {
+  fetchVisitasDeHoyMias,
+  patchEstadoVisita,
+  postReagendarVisita,
+} from "../services/visitas";
+
+// Estados válidos del backend
+const ESTADOS = ["programada", "en_curso", "completada", "cancelada"];
+
+// Claves para localStorage (memoria de filtros/última visita)
 const LS_Q = "tecnico:q";
 const LS_F_ESTADO = "tecnico:fEstado";
 const LS_LAST_VISIT = "tecnico:lastVisitId";
@@ -16,33 +22,32 @@ export default function Tecnico() {
   const [visitas, setVisitas] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Estados con valor inicial desde localStorage
   const [q, setQ] = useState(() => localStorage.getItem(LS_Q) ?? "");
-  const [fEstado, setFEstado] = useState(() => localStorage.getItem(LS_F_ESTADO) ?? "todos");
+  const [fEstado, setFEstado] = useState(
+    () => localStorage.getItem(LS_F_ESTADO) ?? "todos"
+  );
   const [lastVisitId, setLastVisitId] = useState(
     () => localStorage.getItem(LS_LAST_VISIT) ?? ""
   );
 
-  // Carga inicial de visitas
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const data = await getVisitasDeHoy();
-      setVisitas(data);
+  // Cargar visitas de HOY (del técnico logueado)
+  const load = async () => {
+    setLoading(true);
+    try {
+      const data = await fetchVisitasDeHoyMias();
+      setVisitas(data || []);
+    } finally {
       setLoading(false);
-    })();
-  }, []);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
 
   // Persistir filtros en localStorage
-  useEffect(() => {
-    localStorage.setItem(LS_Q, q);
-  }, [q]);
+  useEffect(() => { localStorage.setItem(LS_Q, q); }, [q]);
+  useEffect(() => { localStorage.setItem(LS_F_ESTADO, fEstado); }, [fEstado]);
 
-  useEffect(() => {
-    localStorage.setItem(LS_F_ESTADO, fEstado);
-  }, [fEstado]);
-
-  // Filtrado en memoria
+  // Filtrado en memoria (campos reales del backend)
   const filtradas = useMemo(() => {
     let out = visitas;
     if (fEstado !== "todos") out = out.filter((v) => v.estado === fEstado);
@@ -50,10 +55,14 @@ export default function Tecnico() {
       const x = q.trim().toLowerCase();
       out = out.filter(
         (v) =>
-          v.cliente.toLowerCase().includes(x) ||
-          v.direccion.toLowerCase().includes(x)
+          (v.cliente_nombre || "").toLowerCase().includes(x) ||
+          (v.cliente_direccion || "").toLowerCase().includes(x)
       );
     }
+    // ordenar por hora_programada (string HH:MM:SS o HH:MM)
+    out = [...out].sort((a, b) =>
+      String(a.hora_programada).localeCompare(String(b.hora_programada))
+    );
     return out;
   }, [visitas, q, fEstado]);
 
@@ -67,50 +76,70 @@ export default function Tecnico() {
     return () => clearTimeout(t);
   }, [lastVisitId, visitas]);
 
+  // Badge de estado
+  const EstadoBadge = ({ value }) => {
+    const v = String(value || "").toLowerCase();
+    const base = styles.tag;
+    const cls =
+      v === "programada" ? styles.tagProgramada :
+      v === "en_curso"   ? styles.tagEnCurso :
+      v === "completada" ? styles.tagCompletada :
+      styles.tagCancelada;
+    return <span className={`${base} ${cls}`}>{v.replace("_", " ")}</span>;
+  };
+
   const columns = [
-    { key: "hora", title: "Hora", dataIndex: "hora" },
-    { key: "cliente", title: "Cliente", dataIndex: "cliente" },
-    { key: "direccion", title: "Dirección", dataIndex: "direccion" },
+    {
+      key: "hora",
+      title: "Hora",
+      dataIndex: "hora_programada",
+      render: (v) => String(v).slice(0, 5),
+    },
+    { key: "cliente", title: "Cliente", dataIndex: "cliente_nombre" },
+    { key: "direccion", title: "Dirección", dataIndex: "cliente_direccion" },
     {
       key: "estado",
       title: "Estado",
       dataIndex: "estado",
-      render: (val) => <span style={{ textTransform: "capitalize" }}>{val}</span>,
+      render: (val) => <EstadoBadge value={val} />,
     },
     {
       key: "acciones",
       title: "Acciones",
-      dataIndex: "id",
+      dataIndex: "id_visita",
       render: (_val, row) => (
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className={styles.actions}>
           <select
+            className={styles.select}
             value={row.estado}
             onChange={async (e) => {
               const nuevo = e.target.value;
-              await cambiarEstado(row.id, nuevo);
-              setLastVisitId(row.id);
-              localStorage.setItem(LS_LAST_VISIT, row.id);
-              const fresh = await getVisitasDeHoy();
-              setVisitas(fresh);
+              await patchEstadoVisita(row.id_visita, nuevo);
+              const idStr = String(row.id_visita);
+              setLastVisitId(idStr);
+              localStorage.setItem(LS_LAST_VISIT, idStr);
+              await load();
             }}
           >
             {ESTADOS.map((es) => (
-              <option key={es} value={es}>
-                {es}
-              </option>
+              <option key={es} value={es}>{es}</option>
             ))}
           </select>
 
           <button
+            className={styles.btn}
             onClick={async () => {
-              const nuevaHora = prompt("Nueva hora (HH:mm):", row.hora);
-              if (!nuevaHora) return;
-              const hoy = new Date().toISOString().slice(0, 10);
-              await reagendarVisita(row.id, hoy, nuevaHora);
-              setLastVisitId(row.id);
-              localStorage.setItem(LS_LAST_VISIT, row.id);
-              const fresh = await getVisitasDeHoy();
-              setVisitas(fresh);
+              const hhmm = prompt(
+                "Nueva hora (HH:mm):",
+                String(row.hora_programada || "").slice(0, 5) || "09:00"
+              );
+              if (!hhmm) return;
+              const fechaHoy = new Date().toISOString().slice(0, 10);
+              await postReagendarVisita(row.id_visita, fechaHoy, hhmm);
+              const idStr = String(row.id_visita);
+              setLastVisitId(idStr);
+              localStorage.setItem(LS_LAST_VISIT, idStr);
+              await load();
             }}
           >
             Reagendar
@@ -121,40 +150,37 @@ export default function Tecnico() {
   ];
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <h2>Panel Técnico</h2>
+    <div className={styles.wrapper}>
+      <div className={styles.headerRow}>
+        <h2 className={styles.title}>Panel Técnico</h2>
+      </div>
 
-      <section>
-        <h3>Visitas de Hoy</h3>
+      <section className={styles.card}>
+        <h3 className={styles.sectionTitle}>Visitas de Hoy</h3>
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <div className={styles.toolbar}>
           <input
+            className={styles.input}
             placeholder="Buscar cliente o dirección…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
-
-          <select value={fEstado} onChange={(e) => setFEstado(e.target.value)}>
+          <select
+            className={styles.select}
+            value={fEstado}
+            onChange={(e) => setFEstado(e.target.value)}
+          >
             <option value="todos">Todos</option>
             {ESTADOS.map((e) => (
-              <option key={e} value={e}>
-                {e}
-              </option>
+              <option key={e} value={e}>{e}</option>
             ))}
           </select>
 
-          <button
-            onClick={async () => {
-              setLoading(true);
-              const fresh = await getVisitasDeHoy();
-              setVisitas(fresh);
-              setLoading(false);
-            }}
-          >
+          <button className={`${styles.btn} ${styles.btnPrimary}`} onClick={load}>
             Refrescar
           </button>
-
           <button
+            className={styles.btn}
             onClick={() => {
               localStorage.removeItem(LS_Q);
               localStorage.removeItem(LS_F_ESTADO);
@@ -168,34 +194,51 @@ export default function Tecnico() {
           </button>
         </div>
 
-        {loading ? (
-          <div>Cargando…</div>
-        ) : (
-          <Table
-            columns={columns}
-            data={filtradas}
-            emptyText="Sin visitas para hoy"
-            getRowProps={(row) => ({
-              "data-row-id": row.id,
-              style: {
-                background:
-                  row.id === lastVisitId ? "rgba(255, 215, 0, 0.18)" : "transparent",
-                transition: "background 0.2s ease",
-              },
-            })}
-          />
-        )}
+        <div className={styles.tableWrap}>
+          {loading ? (
+            <div className={styles.empty}>Cargando…</div>
+          ) : filtradas.length === 0 ? (
+            <div className={styles.empty}>Sin visitas para hoy</div>
+          ) : (
+            <table className={styles.table}>
+              <thead className={styles.thead}>
+                <tr>
+                  {columns.map((c) => (
+                    <th key={c.key} className={styles.th}>{c.title}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtradas.map((row) => {
+                  const idStr = String(row.id_visita);
+                  return (
+                    <tr
+                      key={idStr}
+                      data-row-id={idStr}
+                      className={idStr === String(lastVisitId) ? styles.rowHighlight : undefined}
+                    >
+                      {columns.map((c) => {
+                        const val = row[c.dataIndex];
+                        return (
+                          <td key={c.key} className={styles.td}>
+                            {c.render ? c.render(val, row) : val}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
       </section>
 
-      <section>
-        <h3>Acciones rápidas</h3>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={() => alert("Crear visita (pendiente de implementar)")}>
-            Crear visita
-          </button>
-          <button onClick={() => alert("Reagendar (selecciona desde la tabla)")}>
-            Reagendar
-          </button>
+      <section className={styles.card}>
+        <h3 className={styles.sectionTitle}>Acciones rápidas</h3>
+        <div className={styles.quickRow}>
+          <button className={styles.btn}>Crear visita</button>
+          <button className={styles.btn}>Reagendar</button>
         </div>
       </section>
     </div>
