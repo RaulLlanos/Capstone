@@ -1,0 +1,28 @@
+[
+{
+  "model": "sessions.session",
+  "pk": "wix4z5gc80mdvy372kiotpnm8tjfy70i",
+  "fields": {
+    "session_data": ".eJxVi80KAiEQgN_FcyzqoGLHoFvQI8iMM6K0tbCup-jdK9hDXb-fp0o4tppGlzU1Vkdl1OGXEeabPL5i9IFrW_q0oz6d79jm63pZMs6nvfubK_b6OQk5xJIFtHMYENgwaLJRmMRr0jFYYl9KsKWA9iKSLUFmZnRgtKjXGzCmOBc:1uvMKa:rFDJjxrsJYWs6wrS_CMEIaj7kYC94JSIWm22gHdsn3g",
+    "expire_date": "2025-09-21T20:49:48.943Z"
+  }
+},
+{
+  "model": "usuarios.usuario",
+  "fields": {
+    "password": "bcrypt_sha256$$2b$12$flWtT04sJU.MjMQq9dRIEeV3aebvQ.IEfmwlJ9m4tRTXYyEgAH50C",
+    "last_login": "2025-09-07T20:49:48.942Z",
+    "is_superuser": true,
+    "is_staff": true,
+    "is_active": true,
+    "date_joined": "2025-09-07T20:49:09.714Z",
+    "rut_usuario": null,
+    "rol": "tecnico",
+    "first_name": "admin",
+    "last_name": "claro",
+    "email": "admin@claro.com",
+    "groups": [],
+    "user_permissions": []
+  }
+}
+]
