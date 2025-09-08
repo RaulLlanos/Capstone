@@ -53,7 +53,7 @@
   cursor: pointer;
   font-weight: 600;
 }
-.btn:hover { filter: brightness(0.98); }
+.btn:hover { filter: brightness(0.90); }
 .btn:active { transform: translateY(1px); }
 
 .btnPrimary {
