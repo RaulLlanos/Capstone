@@ -108,19 +108,19 @@ if DATABASE_URL:
             ssl_require=True,
         )
     }
-else:
-    # Fallback local (tu Postgres local)
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": "db_claro",
-            "USER": "claro_user",
-            "PASSWORD": "Claro_2025_pg",
-            "HOST": "127.0.0.1",
-            "PORT": "5432",
-            "OPTIONS": {"sslmode": "prefer"},
-        }
-    }
+# else:
+#     # Fallback local (tu Postgres local)
+#     DATABASES = {
+#         "default": {
+#             "ENGINE": "django.db.backends.postgresql",
+#             "NAME": "db_claro",
+#             "USER": "claro_user",
+#             "PASSWORD": "Claro_2025_pg",
+#             "HOST": "127.0.0.1",
+#             "PORT": "5432",
+#             "OPTIONS": {"sslmode": "prefer"},
+#         }
+#     }
 
 # === Password validators ===
 AUTH_PASSWORD_VALIDATORS = [
