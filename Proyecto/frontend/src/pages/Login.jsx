@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import api from "../services/api";           // <— usamos axios con cookies
 import styles from "./Login.module.css";
 
 export default function Login() {
@@ -9,19 +10,47 @@ export default function Login() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState("tecnico");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+
     if (!email || !password) {
       setError("Completa email y password.");
       return;
     }
-    // MOCK: reemplazar cuando tengas backend
-    login({ token: "dev-token", user: { name: email, role } });
-    navigate(role === "auditor" ? "/auditor" : "/tecnico", { replace: true });
+
+    try {
+      setLoading(true);
+
+      // 1) Asegurar cookie CSRF (la API devuelve csrftoken)
+      await api.get("/auth/csrf");
+
+      // 2) Login (setea cookies HttpOnly: access/refresh)
+      await api.post("/auth/login", { email, password });
+
+      // 3) Traer los datos del usuario autenticado (incluye rol)
+      const { data: me } = await api.get("/auth/me");
+      // Espera algo como: { id, email, first_name, last_name, role|rol }
+
+      const role = (me.role || me.rol || "tecnico").toLowerCase();
+      const name =
+        (me.first_name || "") + (me.last_name ? ` ${me.last_name}` : "");
+
+      // 4) Guardar sesión en tu AuthContext
+      // Como el token es cookie HttpOnly, guardamos un marcador local
+      login({ token: "cookie", user: { name: name.trim() || email, role, email: me.email } });
+
+      // 5) Redirigir según rol
+      navigate(role === "auditor" ? "/auditor" : "/tecnico", { replace: true });
+    } catch (err) {
+      console.error(err);
+      setError("Credenciales inválidas o error del servidor.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -42,6 +71,7 @@ export default function Login() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="username"
+              disabled={loading}
             />
           </label>
 
@@ -54,27 +84,15 @@ export default function Login() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
+              disabled={loading}
             />
-          </label>
-
-          {/* Solo para el mock: selector de rol */}
-          <label className={styles.label}>
-            Rol
-            <select
-              className={styles.select}
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-            >
-              <option value="tecnico">Técnico</option>
-              <option value="auditor">Auditor</option>
-            </select>
           </label>
 
           {error && <div className={styles.error}>{error}</div>}
 
           <div className={styles.actions}>
-            <button type="submit" className={styles.button}>
-              Entrar
+            <button type="submit" className={styles.button} disabled={loading}>
+              {loading ? "Ingresando..." : "Entrar"}
             </button>
           </div>
         </form>

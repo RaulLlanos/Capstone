@@ -1,29 +1,25 @@
+// src/services/api.js
 import axios from "axios";
 
-// instancia con la baseURL que pusimos en .env.local
+// lee cookie por nombre (para CSRF si lo necesitas en algún punto)
+function getCookie(name) {
+  const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+  return m ? decodeURIComponent(m.pop()) : "";
+}
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL,
+  baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:8000",
+  withCredentials: true, // ¡clave para cookies HttpOnly!
 });
 
-// interceptor que añade el token a cada request si existe
+// interceptor opcional por si necesitas enviar X-CSRFToken en algún POST/PATCH
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+  const method = (config.method || "get").toLowerCase();
+  if (["post", "put", "patch", "delete"].includes(method)) {
+    const token = getCookie("csrftoken");
+    if (token) config.headers["X-CSRFToken"] = token;
   }
   return config;
 });
-
-// interceptor de respuesta (opcional ahora)
-// si el backend devuelve 401 (no autorizado), limpiamos el token
-api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response && error.response.status === 401) {
-      localStorage.removeItem("token");
-    }
-    return Promise.reject(error);
-  }
-);
 
 export default api;
