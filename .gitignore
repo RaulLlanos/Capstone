@@ -3,3 +3,14 @@ __pycache__/
 Proyecto/backend/media/
 .env
 *.log
+
+# Frontend
+Proyecto/gestion-tecnicos/node_modules/
+Proyecto/gestion-tecnicos/.vite/
+Proyecto/gestion-tecnicos/.env.local
+
+# Varios
+cookies*.txt
+media/
+Proyecto/backend/cookies*.txt
+Proyecto/backend/media/
