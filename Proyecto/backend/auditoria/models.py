@@ -11,35 +11,39 @@ class Auditoria(models.Model):
         MASIVO         = "masivo",         "Incidencia Masivo ClaroVTR"
         REAGENDO       = "reagendo",       "Reagendó"
 
-    asignacion = models.ForeignKey(Asignacion, on_delete=models.PROTECT, related_name="auditorias")
+    asignacion = models.ForeignKey(
+        Asignacion, on_delete=models.PROTECT, related_name="auditorias", verbose_name="Dirección"
+    )
 
     # Snapshot (al crear)
-    marca             = models.CharField(max_length=10)
-    tecnologia        = models.CharField(max_length=10)
-    rut_cliente       = models.CharField(max_length=20, blank=True, null=True)
-    id_vivienda       = models.CharField(max_length=50, blank=True, null=True)
-    direccion_cliente = models.CharField(max_length=255)
+    marca             = models.CharField("Marca", max_length=10)
+    tecnologia        = models.CharField("Tecnología", max_length=10)
+    rut_cliente       = models.CharField("RUT cliente", max_length=20, blank=True, null=True)
+    id_vivienda       = models.CharField("ID vivienda", max_length=50, blank=True, null=True)
+    direccion_cliente = models.CharField("Dirección del cliente", max_length=255)
 
     # Q5
-    estado_cliente = models.CharField(max_length=20, choices=EstadoCliente.choices)
+    estado_cliente = models.CharField("Estado del cliente", max_length=20, choices=EstadoCliente.choices)
 
     # Q72
-    ont_modem_ok = models.BooleanField(blank=True, null=True)
+    ont_modem_ok = models.BooleanField("ONT/Modem bien instalado", blank=True, null=True)
 
-    # Bloques flexibles
-    bloque_agendamiento = models.JSONField(blank=True, null=True)  # Q16/Q71
-    bloque_llegada      = models.JSONField(blank=True, null=True)  # Q17/Q18
-    bloque_proceso      = models.JSONField(blank=True, null=True)  # Q19/Q20
-    bloque_config       = models.JSONField(blank=True, null=True)  # Q21/Q22
-    bloque_cierre       = models.JSONField(blank=True, null=True)  # Q23/Q24
-    percepcion          = models.JSONField(blank=True, null=True)  # Q25..Q32
+    # Bloques flexibles (JSON para Si/No/No Aplica + comentarios)
+    bloque_agendamiento = models.JSONField("Bloque: Agendamiento", blank=True, null=True)
+    bloque_llegada      = models.JSONField("Bloque: Llegada del técnico", blank=True, null=True)
+    bloque_proceso      = models.JSONField("Bloque: Proceso de instalación", blank=True, null=True)
+    bloque_config       = models.JSONField("Bloque: Configuración y pruebas", blank=True, null=True)
+    bloque_cierre       = models.JSONField("Bloque: Cierre de visita técnica", blank=True, null=True)
+    percepcion          = models.JSONField("Percepción del cliente", blank=True, null=True)
 
-    descripcion_problema = models.TextField(blank=True, null=True)  # Q12 (y Q73 si HFC en el front)
+    descripcion_problema = models.TextField("Descripción del problema", blank=True, null=True)
 
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField("Creado", auto_now_add=True)
 
     class Meta:
         db_table = "auditorias"
+        verbose_name = "Auditoría"
+        verbose_name_plural = "Auditorías"
         indexes = [
             models.Index(fields=["marca", "tecnologia", "estado_cliente"]),
             models.Index(fields=["created_at"]),
@@ -55,22 +59,29 @@ class AuditoriaServicio(models.Model):
         FONO     = "fono",     "Fono"
         OTRO     = "otro",     "Otro"
 
-    auditoria = models.ForeignKey(Auditoria, on_delete=models.CASCADE, related_name="servicios")
-    servicio  = models.CharField(max_length=10, choices=Servicio.choices)
+    auditoria = models.ForeignKey(Auditoria, on_delete=models.CASCADE, related_name="servicios", verbose_name="Auditoría")
+    servicio  = models.CharField("Servicio", max_length=10, choices=Servicio.choices)
 
     class Meta:
         db_table = "auditoria_servicios"
+        verbose_name = "Servicio en auditoría"
+        verbose_name_plural = "Servicios en auditoría"
 
     def __str__(self):
         return f"Servicio {self.servicio} (Auditoría {self.auditoria_id})"
 
 class AuditoriaCategoria(models.Model):
-    auditoria_servicio = models.ForeignKey(AuditoriaServicio, on_delete=models.CASCADE, related_name="categorias")
-    categoria = models.CharField(max_length=100)  # Ej.: "Navegaba muy lento"
-    extra     = models.TextField(blank=True, null=True)  # Para "Otro. ¿Cuál?"
+    auditoria_servicio = models.ForeignKey(
+        AuditoriaServicio, on_delete=models.CASCADE, related_name="categorias",
+        verbose_name="Servicio en auditoría"
+    )
+    categoria = models.CharField("Categoría", max_length=100)  # Ej.: "Navegaba muy lento"
+    extra     = models.TextField("Detalle adicional", blank=True, null=True)  # Para "Otro. ¿Cuál?"
 
     class Meta:
         db_table = "auditoria_categorias"
+        verbose_name = "Categoría de servicio"
+        verbose_name_plural = "Categorías de servicio"
 
     def __str__(self):
         return f"Cat '{self.categoria}' (Serv {self.auditoria_servicio_id})"
@@ -82,16 +93,20 @@ class EvidenciaServicio(models.Model):
         COMPROBANTE = "comprobante", "Comprobante"
         OTRO        = "otro",        "Otro"
 
-    auditoria  = models.ForeignKey(Auditoria, on_delete=models.CASCADE, related_name="evidencias", blank=True, null=True)
-    asignacion = models.ForeignKey(Asignacion, on_delete=models.CASCADE, related_name="evidencias")
-    tipo       = models.CharField(max_length=20, choices=Tipo.choices, default=Tipo.FOTO)
-    archivo    = models.ImageField(upload_to="auditorias/%Y/%m/%d/")
-    descripcion = models.TextField(blank=True, null=True)
-    usuario     = models.ForeignKey(Usuario, on_delete=models.RESTRICT)
-    created_at  = models.DateTimeField(auto_now_add=True)
+    auditoria  = models.ForeignKey(Auditoria, on_delete=models.CASCADE, related_name="evidencias",
+                                   blank=True, null=True, verbose_name="Auditoría")
+    asignacion = models.ForeignKey(Asignacion, on_delete=models.CASCADE, related_name="evidencias",
+                                   verbose_name="Dirección")
+    tipo       = models.CharField("Tipo", max_length=20, choices=Tipo.choices, default=Tipo.FOTO)
+    archivo    = models.ImageField("Archivo", upload_to="auditorias/%Y/%m/%d/")
+    descripcion = models.TextField("Descripción", blank=True, null=True)
+    usuario     = models.ForeignKey(Usuario, on_delete=models.RESTRICT, verbose_name="Usuario")
+    created_at  = models.DateTimeField("Creado", auto_now_add=True)
 
     class Meta:
         db_table = "evidencias_servicio"
+        verbose_name = "Evidencia"
+        verbose_name_plural = "Evidencias"
 
     def __str__(self):
         return f"Evidencia {self.tipo} #{self.id}"

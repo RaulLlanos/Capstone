@@ -33,36 +33,42 @@ class ZonaSantiago(models.TextChoices):
     SUR    = "SUR",    "Sur"
 
 class DireccionAsignada(models.Model):
-    fecha       = models.DateField(null=True, blank=True)
-    tecnologia  = models.CharField(max_length=10, choices=Tecnologia.choices)
-    marca       = models.CharField(max_length=10, choices=Marca.choices)
-    rut_cliente = models.CharField(max_length=20)
-    id_vivienda = models.CharField(max_length=50)
-    direccion   = models.CharField(max_length=255)
-    comuna      = models.CharField(max_length=80, blank=True)  # opcional (útil para filtros)
-    zona        = models.CharField(max_length=10, choices=ZonaSantiago.choices, blank=True)  # NORTE/CENTRO/SUR
+    fecha       = models.DateField("Fecha programada", null=True, blank=True)
+    tecnologia  = models.CharField("Tecnología", max_length=10, choices=Tecnologia.choices)
+    marca       = models.CharField("Marca", max_length=10, choices=Marca.choices)
+    rut_cliente = models.CharField("RUT cliente", max_length=20)
+    id_vivienda = models.CharField("ID vivienda", max_length=50)
+    direccion   = models.CharField("Dirección del cliente", max_length=255)
+    comuna      = models.CharField("Comuna", max_length=80, blank=True)
+    zona        = models.CharField("Zona", max_length=10, choices=ZonaSantiago.choices, blank=True)
 
-    encuesta     = models.CharField(max_length=20, choices=TipoEncuesta.choices)
-    id_qualtrics = models.CharField(max_length=64, blank=True)
+    encuesta     = models.CharField("Encuesta de origen", max_length=20, choices=TipoEncuesta.choices)
+    id_qualtrics = models.CharField("ID Qualtrics", max_length=64, blank=True)
 
     asignado_a = models.ForeignKey(
-        Usuario, null=True, blank=True, on_delete=models.SET_NULL,
+        Usuario, verbose_name="Técnico asignado",
+        null=True, blank=True, on_delete=models.SET_NULL,
         limit_choices_to={"rol": "tecnico"}
     )
 
     estado = models.CharField(
-        max_length=10, choices=EstadoAsignacion.choices, default=EstadoAsignacion.PENDIENTE
+        "Estado", max_length=10, choices=EstadoAsignacion.choices, default=EstadoAsignacion.PENDIENTE
     )
 
     # reagendamiento efectivo (último)
-    reagendado_fecha  = models.DateField(null=True, blank=True)
-    reagendado_bloque = models.CharField(max_length=5, choices=BloqueHorario.choices, null=True, blank=True)
+    reagendado_fecha  = models.DateField("Reagendado fecha", null=True, blank=True,
+                                         help_text="Solo se completa cuando el cliente reagenda.")
+    reagendado_bloque = models.CharField("Reagendado bloque", max_length=5,
+                                         choices=BloqueHorario.choices, null=True, blank=True,
+                                         help_text="Solo se completa cuando el cliente reagenda.")
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField("Creado", auto_now_add=True)
+    updated_at = models.DateTimeField("Actualizado", auto_now=True)
 
     class Meta:
         db_table = "asignaciones"
+        verbose_name = "Dirección"
+        verbose_name_plural = "Direcciones"
         indexes = [
             models.Index(fields=["rut_cliente", "id_vivienda"]),
             models.Index(fields=["marca", "tecnologia"]),
@@ -70,7 +76,6 @@ class DireccionAsignada(models.Model):
             models.Index(fields=["comuna"]),
             models.Index(fields=["zona"]),
         ]
-        # Evita tener *más de una* asignación activa (con técnico asignado) para el mismo cliente/vivienda
         constraints = [
             models.UniqueConstraint(
                 fields=["rut_cliente", "id_vivienda"],
@@ -83,19 +88,23 @@ class DireccionAsignada(models.Model):
         who = self.asignado_a.email if self.asignado_a else "sin asignar"
         return f"{self.direccion} ({self.marca}/{self.tecnologia}) → {who}"
 
-# ---- Trazabilidad ----
 class Reagendamiento(models.Model):
-    asignacion = models.ForeignKey(DireccionAsignada, on_delete=models.CASCADE, related_name="reagendamientos")
-    fecha_anterior   = models.DateField(null=True, blank=True)
-    bloque_anterior  = models.CharField(max_length=5, choices=BloqueHorario.choices, null=True, blank=True)
-    fecha_nueva      = models.DateField()
-    bloque_nuevo     = models.CharField(max_length=5, choices=BloqueHorario.choices)
-    motivo           = models.TextField()
-    usuario          = models.ForeignKey(Usuario, on_delete=models.RESTRICT)
-    created_at       = models.DateTimeField(auto_now_add=True)
+    asignacion = models.ForeignKey(
+        DireccionAsignada, on_delete=models.CASCADE, related_name="reagendamientos",
+        verbose_name="Dirección"
+    )
+    fecha_anterior   = models.DateField("Fecha anterior", null=True, blank=True)
+    bloque_anterior  = models.CharField("Bloque anterior", max_length=5, choices=BloqueHorario.choices, null=True, blank=True)
+    fecha_nueva      = models.DateField("Fecha nueva")
+    bloque_nuevo     = models.CharField("Bloque nuevo", max_length=5, choices=BloqueHorario.choices)
+    motivo           = models.TextField("Motivo")
+    usuario          = models.ForeignKey(Usuario, on_delete=models.RESTRICT, verbose_name="Usuario")
+    created_at       = models.DateTimeField("Creado", auto_now_add=True)
 
     class Meta:
         db_table = "reagendamientos"
+        verbose_name = "Reagendamiento"
+        verbose_name_plural = "Reagendamientos"
 
     def __str__(self):
         return f"Reagendamiento #{self.id} → {self.asignacion_id}"
@@ -109,18 +118,22 @@ class HistorialAsignacion(models.Model):
         CERRADA           = "CERRADA",          "Cerrada"
         AUDITORIA_CREADA  = "AUDITORIA_CREADA", "Auditoría creada"
 
-    asignacion = models.ForeignKey(DireccionAsignada, on_delete=models.CASCADE, related_name="historial")
-    accion     = models.CharField(max_length=32, choices=Accion.choices)
-    detalles   = models.TextField(blank=True)
-    usuario    = models.ForeignKey(Usuario, on_delete=models.SET_NULL, null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    asignacion = models.ForeignKey(
+        DireccionAsignada, on_delete=models.CASCADE, related_name="historial", verbose_name="Dirección"
+    )
+    accion     = models.CharField("Acción", max_length=32, choices=Accion.choices)
+    detalles   = models.TextField("Detalles", blank=True)
+    usuario    = models.ForeignKey(Usuario, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="Usuario")
+    created_at = models.DateTimeField("Creado", auto_now_add=True)
 
     class Meta:
         db_table = "historial_asignaciones"
+        verbose_name = "Historial de dirección"
+        verbose_name_plural = "Historial de direcciones"
         ordering = ["-created_at"]
 
     def __str__(self):
         return f"H{self.id} {self.accion} @A{self.asignacion_id}"
 
-# ---- Alias para compatibilidad con otras apps ----
+# Alias para otras apps
 Asignacion = DireccionAsignada
