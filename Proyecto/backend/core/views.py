@@ -1,16 +1,30 @@
 # core/views.py
 from django.http import HttpResponse
+from django.utils.html import escape
+
+ESTADOS_LABEL = {
+    "autoriza": "Autoriza a ingresar",
+    "sin_moradores": "Sin Moradores",
+    "rechaza": "Rechaza",
+    "contingencia": "Contingencia externa",
+    "masivo": "Incidencia Masivo ClaroVTR",
+    "reagendo": "Reagendó",
+}
 
 def gracias(request):
-    estado = request.GET.get("estado", "")
-    asignacion_id = request.GET.get("id", "")
-    html = f"""
-<!DOCTYPE html>
+    estado_code = request.GET.get("estado", "") or ""
+    estado_safe = escape(estado_code)
+    estado_label = ESTADOS_LABEL.get(estado_code, estado_safe)
+
+    asignacion_id = escape(request.GET.get("id", "") or "")
+
+    html = f"""<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="utf-8">
   <title>Gracias - ClaroVTR</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow">
   <style>
     :root {{ color-scheme: light dark; }}
     body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol'; margin: 0; }}
@@ -32,7 +46,7 @@ def gracias(request):
     <div class="card">
       <h1>¡Gracias!</h1>
       <p>Registramos el resultado de la visita{(" #" + asignacion_id) if asignacion_id else ""}.</p>
-      {f'<p class="muted">Estado seleccionado: <strong>{estado}</strong></p>' if estado else ""}
+      {f'<p class="muted">Estado seleccionado: <strong>{estado_label}</strong></p>' if estado_label else ""}
       <p class="muted">Equipo <span class="brand">ClaroVTR</span></p>
       <div class="foot">Puede cerrar esta página.</div>
     </div>
@@ -40,4 +54,4 @@ def gracias(request):
 </body>
 </html>
 """
-    return HttpResponse(html)
+    return HttpResponse(html, content_type="text/html; charset=utf-8")
