@@ -1,40 +1,34 @@
 # claro_project/urls.py
 from django.contrib import admin
 from django.urls import path, include
-from django.http import JsonResponse, HttpResponse
+from django.http import JsonResponse
 from rest_framework import routers
 
 from django.conf import settings
 from django.conf.urls.static import static
 
-from usuarios import views as usuarios_views
-from usuarios.auth_views import RegisterView, LoginView, MeView, LogoutView, RefreshCookieView, CsrfTokenView
-
-# NUEVO: importa los viewsets refactorizados
 from asignaciones.views import AsignacionViewSet
-from auditoria.views import AuditoriaViewSet
+
 
 from core.views import gracias
 
-from drf_spectacular.views import (
-    SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
+from usuarios import views as usuarios_views
+from usuarios.auth_views import (
+    RegisterView, LoginView, MeView, LogoutView, RefreshCookieView, CsrfTokenView
 )
 
+# Puedes importar el alias AsignacionViewSet si lo dejaste en asignaciones/views.py,
+# o importar DireccionAsignadaViewSet directamente. Aquí uso el alias:
+from asignaciones.views import AsignacionViewSet
+from auditoria.views import AuditoriaVisitaViewSet, IssueViewSet
+
 router = routers.DefaultRouter()
+router.register(r'usuarios', usuarios_views.UsuarioViewSet, basename='usuarios')
 
-# Usuarios: deja solo el viewset actual que realmente uses
-router.register(r'usuarios', usuarios_views.UsuarioViewSet)
-
-# QUITAR viewsets legacy (si existen en tu código, comenta/elimina):
-# router.register(r'tecnicos', usuarios_views.TecnicoViewSet)
-# router.register(r'visitas', usuarios_views.VisitaViewSet)
-# router.register(r'reagendamientos', usuarios_views.ReagendamientoViewSet)
-# router.register(r'historial', usuarios_views.HistorialVisitaViewSet)
-# router.register(r'evidencias', usuarios_views.EvidenciaServicioViewSet)
-
-# Asignaciones/Auditorías nuevas
+# Asignaciones / Auditorías (actuales)
 router.register(r'asignaciones', AsignacionViewSet, basename='asignaciones')
-router.register(r'auditorias',   AuditoriaViewSet,   basename='auditorias')
+router.register(r'auditorias',   AuditoriaVisitaViewSet, basename='auditorias')
+router.register(r'issues',       IssueViewSet,           basename='issues')
 
 urlpatterns = [
     path('', lambda r: JsonResponse({
@@ -58,11 +52,6 @@ urlpatterns = [
     path('auth/csrf',     CsrfTokenView.as_view(), name='auth-csrf'),
 
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')),
-
-    path('schema/', SpectacularAPIView.as_view(), name='schema'),
-    path('docs/',   SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
-    path('redoc/',  SpectacularRedocView.as_view(url_name='schema'),   name='redoc'),
-    path('gracias/', gracias, name='gracias'),
 ]
 
 if settings.DEBUG:
