@@ -11,7 +11,7 @@ class EmailOrLocalBackend(ModelBackend):
             return None
 
         # Si es email
-        if '@' in username:
+        if "@" in username:
             try:
                 user = Usuario.objects.get(email__iexact=username)
             except Usuario.DoesNotExist:

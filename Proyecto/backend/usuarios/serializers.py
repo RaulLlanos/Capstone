@@ -1,29 +1,30 @@
-# usuarios/serializers.py
 from rest_framework import serializers
-from .models import Usuario, Tecnico, Visita, Reagendamiento, HistorialVisita, EvidenciaServicio
-
+from .models import Usuario
 
 class UsuarioSerializer(serializers.ModelSerializer):
-    # Permite setear password en create/update (write_only)
     password = serializers.CharField(write_only=True, required=False, allow_blank=False)
+    rut = serializers.CharField(read_only=True)  # "XXXXXXXX-D" para mostrar
 
     class Meta:
         model = Usuario
-        # Campos expuestos (seguros): NO exponemos hash ni is_superuser
         fields = [
-            'id', 'email', 'first_name', 'last_name', 'rut_usuario',
-            'rol', 'is_active', 'is_staff', 'date_joined', 'password'
+            "id", "email", "first_name", "last_name",
+            "rol",
+            "rut_num", "dv", "rut",
+            "is_active", "is_staff", "date_joined",
+            "password",
         ]
-        read_only_fields = ['id', 'date_joined', 'is_staff']  # is_staff lo maneja solo admin
+        read_only_fields = ["id", "date_joined", "is_staff"]
+
+    def validate(self, attrs):
+        # Normaliza DV en mayúsculas (k → K)
+        dv = attrs.get("dv")
+        if dv:
+            attrs["dv"] = dv.upper()
+        return attrs
 
     def create(self, validated_data):
-        """
-        Crear usuario:
-        - Hashea password si viene.
-        - Activa el usuario por defecto.
-        Nota: el control de "quién puede crear" lo hace la ViewSet (permisos).
-        """
-        password = validated_data.pop('password', None)
+        password = validated_data.pop("password", None)
         user = Usuario(**validated_data)
         if password:
             user.set_password(password)
@@ -32,21 +33,19 @@ class UsuarioSerializer(serializers.ModelSerializer):
         return user
 
     def update(self, instance, validated_data):
-        """
-        Actualizar usuario:
-        - Si NO es admin/auditor, no dejamos que cambien campos sensibles:
-            rol / is_staff / is_superuser
-        - Hasheamos password si llega.
-        """
-        request = self.context.get('request')
-        is_admin_or_auditor = bool(request and getattr(request.user, 'rol', None) in ('admin', 'auditor'))
+        request = self.context.get("request")
+        is_auditor = bool(request and getattr(request.user, "rol", None) == "auditor")
 
-        # Blindar campos sensibles si el que actualiza no es admin/auditor
-        if not is_admin_or_auditor:
-            for sensitive in ('rol', 'is_staff', 'is_superuser'):
+        # Solo auditor puede cambiar rol / staff / superuser vía API (si quieres aún más estricto, remueve is_* aquí)
+        if not is_auditor:
+            for sensitive in ("rol", "is_staff", "is_superuser"):
                 validated_data.pop(sensitive, None)
 
-        pwd = validated_data.pop('password', None)
+        pwd = validated_data.pop("password", None)
+
+        # Normaliza DV si viene
+        if "dv" in validated_data and validated_data["dv"]:
+            validated_data["dv"] = validated_data["dv"].upper()
 
         for k, v in validated_data.items():
             setattr(instance, k, v)
@@ -56,33 +55,3 @@ class UsuarioSerializer(serializers.ModelSerializer):
 
         instance.save()
         return instance
-
-
-class TecnicoSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Tecnico
-        fields = '__all__'
-
-
-class VisitaSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Visita
-        fields = '__all__'
-
-
-class ReagendamientoSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Reagendamiento
-        fields = '__all__'
-
-
-class HistorialVisitaSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = HistorialVisita
-        fields = '__all__'
-
-
-class EvidenciaServicioSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = EvidenciaServicio
-        fields = '__all__'

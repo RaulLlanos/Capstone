@@ -1,4 +1,3 @@
-# usuarios/auth_docs_serializers.py
 from rest_framework import serializers
 
 class RegisterDocSerializer(serializers.Serializer):
@@ -6,11 +5,11 @@ class RegisterDocSerializer(serializers.Serializer):
     password = serializers.CharField()
     first_name = serializers.CharField()
     last_name = serializers.CharField()
-    rut_usuario = serializers.CharField(required=False, allow_blank=True)
-    rol = serializers.ChoiceField(choices=['tecnico', 'auditor', 'admin'])
+    rut_num = serializers.IntegerField(required=False)  # opcional
+    dv = serializers.CharField(required=False, max_length=1)
+    rol = serializers.ChoiceField(choices=["tecnico", "auditor"])
 
 class LoginDocSerializer(serializers.Serializer):
-    # Permitimos tres variantes como describiste
     email = serializers.EmailField(required=False)
     username = serializers.CharField(required=False)  # local-part antes del @
     login = serializers.CharField(required=False)     # email o local-part
