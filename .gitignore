@@ -4,4 +4,15 @@ Proyecto/backend/media/
 .env
 *.log
 .venv
-migrations
+migrations# Python
+Proyecto/backend/venv/
+Proyecto/backend/.venv/
+**/__pycache__/
+*.py[cod]
+
+# Media subida
+Proyecto/backend/media/
+
+# Frontend
+Proyecto/gestion-tecnicos/node_modules/
+Proyecto/gestion-tecnicos/.vite/
