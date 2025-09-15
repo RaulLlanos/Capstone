@@ -4,3 +4,4 @@ Proyecto/backend/media/
 .env
 *.log
 .venv
+migrations

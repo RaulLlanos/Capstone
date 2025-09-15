@@ -1,159 +1,184 @@
 // src/pages/Registro.jsx
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-//import api from "../services/api";            // lo usaremos cuando haya backend
-import styles from "./Login.module.css";      // reutilizamos estilos del login
+import { useState } from "react";
+import api from "../services/api";
+import styles from "./Login.module.css";
 
-const emailRegex =
-  /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i; // formato de email razonable
+const ROLES = [
+  { value: "tecnico", label: "Técnico" },
+  { value: "auditor", label: "Auditor" },
+];
+
+const isEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
 export default function Registro() {
-  const navigate = useNavigate();
+  const [form, setForm] = useState({
+    first_name: "",
+    last_name: "",
+    email: "",
+    password: "",
+    password2: "",
+    rut_num: "",
+    rut_dv: "",
+    rol: "tecnico",
+    is_active: true,
+  });
+  const [loading, setLoading] = useState(false);
+  const [ok, setOk] = useState("");
+  const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState({});
 
-  const [nombre, setNombre] = useState("");
-  const [correo, setCorreo] = useState("");
-  const [password, setPassword] = useState("");
-  const [rol, setRol] = useState("tecnico");
+  const onChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    const v = type === "checkbox" ? checked : value;
+    setForm((f) => ({ ...f, [name]: v }));
+    setFieldErrors((fe) => ({ ...fe, [name]: "" }));
+  };
 
-  const [touched, setTouched] = useState({ nombre: false, correo: false, password: false });
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState("");
+  const validate = () => {
+    const fe = {};
+    if (!form.first_name.trim()) fe.first_name = "Requerido.";
+    if (!form.last_name.trim()) fe.last_name = "Requerido.";
+    if (!isEmail(form.email)) fe.email = "Email inválido.";
+    if ((form.password || "").length < 8) fe.password = "Mínimo 8 caracteres.";
+    if (form.password !== form.password2) fe.password2 = "Las contraseñas no coinciden.";
+    if (!/^\d+$/.test(form.rut_num)) fe.rut_num = "Solo números.";
+    return fe;
+  };
 
-  // Validaciones
-  const errors = useMemo(() => {
-    const e = {};
-    if (!nombre.trim()) e.nombre = "Ingresa tu nombre.";
-    if (!correo.trim()) e.correo = "Ingresa tu correo.";
-    else if (!emailRegex.test(correo.trim())) e.correo = "Formato de correo inválido.";
-    if (!password) e.password = "Ingresa una contraseña.";
-    else if (password.length < 8) e.password = "La contraseña debe tener al menos 8 caracteres.";
-    return e;
-  }, [nombre, correo, password]);
-
-  const isValid = Object.keys(errors).length === 0;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setSubmitError("");
-    setTouched({ nombre: true, correo: true, password: true });
+    setOk("");
+    setError("");
+    setFieldErrors({});
 
-    if (!isValid) return;
+    const fe = validate();
+    if (Object.keys(fe).length) {
+      setFieldErrors(fe);
+      return;
+    }
 
     try {
-      setSubmitting(true);
+      setLoading(true);
+      await api.get("/auth/csrf");
 
-      // MOCK: por ahora no llamamos backend; solo simulamos éxito
-      // Cuando haya endpoint:
-      // await api.post("/usuarios/", { nombre, email: correo, password, rol });
+      // Ajusta las claves si tu serializer usa otros nombres
+      const payload = {
+        email: form.email.trim().toLowerCase(),
+        password: form.password,
+        first_name: form.first_name.trim(),
+        last_name: form.last_name.trim(),
+        rut_num: form.rut_num.trim(),
+        rut_dv: form.rut_dv.trim().toUpperCase(),
+        rol: form.rol,
+        is_active: form.is_active,
+      };
 
-      alert("Usuario registrado correctamente (mock).");
-      navigate("/login");
+      await api.post("/auth/register", payload);
+
+      setOk("Usuario creado correctamente.");
+      setForm({
+        first_name: "",
+        last_name: "",
+        email: "",
+        password: "",
+        password2: "",
+        rut_num: "",
+        rut_dv: "",
+        rol: "tecnico",
+        is_active: true,
+      });
     } catch (err) {
+      const data = err?.response?.data || {};
+      const fe2 = {};
+      if (typeof data === "object") {
+        Object.entries(data).forEach(([k, v]) => {
+          if (Array.isArray(v)) fe2[k] = v.join(" ");
+          else if (typeof v === "string") fe2[k] = v;
+        });
+      }
+      if (Object.keys(fe2).length) setFieldErrors(fe2);
+      else setError(data.detail || data.error || "No se pudo crear el usuario.");
       console.error(err);
-      setSubmitError("Error al registrar usuario. Intenta nuevamente.");
     } finally {
-      setSubmitting(false);
+      setLoading(false);
     }
   };
-
-  // Accesibilidad: limpiar error de submit al modificar campos
-  useEffect(() => {
-    if (submitError) setSubmitError("");
-  }, [nombre, correo, password, rol]); // eslint-disable-line
 
   return (
     <div className={styles.wrapper}>
       <div className={styles.card}>
         <header className={styles.header}>
-          <h1 className={styles.title}>Registro</h1>
-          <p className={styles.subtitle}>Crea una cuenta nueva</p>
+          <h1 className={styles.title}>Crear usuario</h1>
+          <p className={styles.subtitle}>Completa los datos requeridos</p>
         </header>
 
-        <form onSubmit={handleSubmit} className={styles.form} noValidate>
-          {/* Nombre */}
+        <form onSubmit={handleSubmit} className={styles.form}>
           <label className={styles.label}>
-            Nombre completo
-            <input
-              className={styles.input}
-              type="text"
-              value={nombre}
-              onChange={(e) => setNombre(e.target.value)}
-              onBlur={() => setTouched((t) => ({ ...t, nombre: true }))}
-              disabled={submitting}
-              aria-invalid={!!errors.nombre}
-              aria-describedby="err-nombre"
-            />
+            Email
+            <input className={styles.input} name="email" type="email" value={form.email} onChange={onChange} disabled={loading}/>
+            {fieldErrors.email && <small className={styles.error}>{fieldErrors.email}</small>}
           </label>
-          {touched.nombre && errors.nombre && (
-            <div id="err-nombre" className={styles.error}>{errors.nombre}</div>
-          )}
 
-          {/* Correo */}
-          <label className={styles.label}>
-            Correo
-            <input
-              className={styles.input}
-              type="email"
-              value={correo}
-              onChange={(e) => setCorreo(e.target.value)}
-              onBlur={() => setTouched((t) => ({ ...t, correo: true }))}
-              disabled={submitting}
-              autoComplete="username"
-              aria-invalid={!!errors.correo}
-              aria-describedby="err-correo"
-            />
-          </label>
-          {touched.correo && errors.correo && (
-            <div id="err-correo" className={styles.error}>{errors.correo}</div>
-          )}
-
-          {/* Password */}
           <label className={styles.label}>
             Contraseña
-            <input
-              className={styles.input}
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onBlur={() => setTouched((t) => ({ ...t, password: true }))}
-              disabled={submitting}
-              autoComplete="new-password"
-              aria-invalid={!!errors.password}
-              aria-describedby="err-password"
-            />
+            <input className={styles.input} name="password" type="password" value={form.password} onChange={onChange} disabled={loading}/>
+            {fieldErrors.password && <small className={styles.error}>{fieldErrors.password}</small>}
           </label>
-          {touched.password && errors.password && (
-            <div id="err-password" className={styles.error}>{errors.password}</div>
-          )}
-          <div style={{ fontSize: 12, color: "#6b7280", marginTop: -6 }}>
-            Mínimo 8 caracteres.
+
+          <label className={styles.label}>
+            Contraseña (confirmación)
+            <input className={styles.input} name="password2" type="password" value={form.password2} onChange={onChange} disabled={loading}/>
+            {fieldErrors.password2 && <small className={styles.error}>{fieldErrors.password2}</small>}
+          </label>
+
+          <label className={styles.label}>
+            Nombre
+            <input className={styles.input} name="first_name" type="text" value={form.first_name} onChange={onChange} disabled={loading}/>
+            {fieldErrors.first_name && <small className={styles.error}>{fieldErrors.first_name}</small>}
+          </label>
+
+          <label className={styles.label}>
+            Apellido
+            <input className={styles.input} name="last_name" type="text" value={form.last_name} onChange={onChange} disabled={loading}/>
+            {fieldErrors.last_name && <small className={styles.error}>{fieldErrors.last_name}</small>}
+          </label>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: "8px" }}>
+            <label className={styles.label} style={{ margin: 0 }}>
+              RUT (sin DV)
+              <input className={styles.input} name="rut_num" type="text" value={form.rut_num} onChange={onChange} disabled={loading}/>
+              {fieldErrors.rut_num && <small className={styles.error}>{fieldErrors.rut_num}</small>}
+            </label>
+            <label className={styles.label} style={{ margin: 0 }}>
+              DV
+              <input className={styles.input} name="rut_dv" type="text" maxLength={1} value={form.rut_dv} onChange={onChange} disabled={loading}/>
+              {fieldErrors.rut_dv && <small className={styles.error}>{fieldErrors.rut_dv}</small>}
+            </label>
+            
           </div>
 
-          {/* Rol */}
           <label className={styles.label}>
             Rol
-            <select
-              className={styles.select}
-              value={rol}
-              onChange={(e) => setRol(e.target.value)}
-              disabled={submitting}
-            >
-              <option value="tecnico">Técnico</option>
-              <option value="auditor">Auditor</option>
-              <option value="admin">Administrador</option>
+            <select className={styles.select} name="rol" value={form.rol} onChange={onChange} disabled={loading}>
+              {ROLES.map((r) => (
+                <option key={r.value} value={r.value}>{r.label}</option>
+              ))}
             </select>
+            {fieldErrors.rol && <small className={styles.error}>{fieldErrors.rol}</small>}
           </label>
 
-          {submitError && <div className={styles.error}>{submitError}</div>}
+          <label className={styles.label} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="checkbox" name="is_active" checked={form.is_active} onChange={onChange} disabled={loading}/>
+            Activo
+          </label>
+
+          {error && <div className={styles.error}>{error}</div>}
+          {ok && <div className={styles.success}>{ok}</div>}
 
           <div className={styles.actions}>
-            <button
-              type="submit"
-              className={styles.button}
-              disabled={submitting || !isValid}
-              title={!isValid ? "Completa los campos requeridos" : "Registrarse"}
-            >
-              {submitting ? "Registrando..." : "Registrarse"}
+            <button type="submit" className={styles.button} disabled={loading}>
+              {loading ? "Creando…" : "Crear usuario"}
             </button>
           </div>
         </form>
