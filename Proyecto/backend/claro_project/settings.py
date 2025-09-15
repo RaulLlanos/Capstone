@@ -194,3 +194,8 @@ AUTHENTICATION_BACKENDS = [
 # === Límites de subida ===
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
+# Redirecciones post login/logout (para /api-auth/login/)
+# LOGIN_REDIRECT_URL = "/docs/"           # o "/api/" si prefieres
+LOGIN_REDIRECT_URL = "/api/"           # o "/api/" si prefieres
+LOGOUT_REDIRECT_URL = "/api-auth/login/"
+LOGIN_URL = "/api-auth/login/"

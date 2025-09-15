@@ -1,93 +1,93 @@
 from rest_framework import serializers
-from .models import Auditoria, AuditoriaServicio, AuditoriaCategoria, EvidenciaServicio
-from asignaciones.models import Asignacion, EstadoAsignacion, HistorialAsignacion
+from .models import AuditoriaVisita, Issue
 
-class AuditoriaCategoriaSerializer(serializers.ModelSerializer):
+
+class IssueSerializer(serializers.ModelSerializer):
     class Meta:
-        model = AuditoriaCategoria
-        fields = ("id", "categoria", "extra")
+        model = Issue
+        fields = "__all__"
 
-class AuditoriaServicioSerializer(serializers.ModelSerializer):
-    categorias = AuditoriaCategoriaSerializer(many=True, required=False)
+
+class AuditoriaVisitaSerializer(serializers.ModelSerializer):
+    """
+    - Crea auditoría sobre una DireccionAsignada.
+    - Inyecta snapshot (marca/tecnología/rut/id_vivienda/dirección) desde la asignación.
+    - Permite issues anidados opcionales.
+    - Valida fotos opcionalmente (si vienen en el mismo POST).
+    """
+    issues = IssueSerializer(many=True, required=False)
 
     class Meta:
-        model = AuditoriaServicio
-        fields = ("id", "servicio", "categorias")
-
-class AuditoriaSerializer(serializers.ModelSerializer):
-    servicios = AuditoriaServicioSerializer(many=True, required=False)
-
-    class Meta:
-        model = Auditoria
-        fields = (
-            "id", "asignacion",
-            "marca","tecnologia","rut_cliente","id_vivienda","direccion_cliente",
-            "estado_cliente","ont_modem_ok",
-            "bloque_agendamiento","bloque_llegada","bloque_proceso","bloque_config","bloque_cierre","percepcion",
-            "descripcion_problema",
-            "servicios",
+        model = AuditoriaVisita
+        fields = "__all__"
+        read_only_fields = (
             "created_at",
+            "marca", "tecnologia",
+            "rut_cliente", "id_vivienda", "direccion_cliente",
         )
-        read_only_fields = ("marca","tecnologia","rut_cliente","id_vivienda","direccion_cliente","created_at")
+
+    # --- helpers de validación de imagen ---
+    def _validate_image(self, fileobj, field_name):
+        if not fileobj:
+            return
+        content_type = getattr(fileobj, "content_type", "") or ""
+        if not content_type.startswith("image/"):
+            raise serializers.ValidationError({field_name: "Solo imágenes."})
+        size = getattr(fileobj, "size", 0) or 0
+        if size > 10 * 1024 * 1024:  # 10 MB
+            raise serializers.ValidationError({field_name: "Máximo 10MB por imagen."})
 
     def validate(self, attrs):
+        """
+        Chequeos:
+        - Si es técnico, solo puede crear sobre su propia asignación.
+        - Valida fotos si vienen en este mismo POST.
+        """
         request = self.context.get("request")
         asignacion = attrs.get("asignacion")
-        if not asignacion:
-            raise serializers.ValidationError("Falta asignación.")
 
-        # Técnicos: solo su propia asignación
         if request and getattr(request.user, "rol", None) == "tecnico":
-            if asignacion.asignado_a_id != request.user.id:
+            if asignacion and asignacion.asignado_a_id != request.user.id:
                 raise serializers.ValidationError("No autorizado para esta asignación.")
+
+        # Validación de imágenes (multipart)
+        if request and hasattr(request, "FILES"):
+            self._validate_image(request.FILES.get("foto_1"), "foto_1")
+            self._validate_image(request.FILES.get("foto_2"), "foto_2")
+            self._validate_image(request.FILES.get("foto_3"), "foto_3")
+
+        # Algunos parsers dejan archivos en initial_data
+        if hasattr(self, "initial_data"):
+            for fname in ("foto_1", "foto_2", "foto_3"):
+                f = self.initial_data.get(fname)
+                if hasattr(f, "content_type"):
+                    self._validate_image(f, fname)
 
         return attrs
 
     def create(self, validated_data):
-        servicios_data = validated_data.pop("servicios", [])
-        asignacion: Asignacion = validated_data["asignacion"]
+        issues_data = validated_data.pop("issues", [])
+        asignacion = validated_data["asignacion"]
 
-        # Snapshot desde Asignacion/Direccion al momento de crear
-        auditoria = Auditoria.objects.create(
-            asignacion = asignacion,
-            estado_cliente = validated_data.get("estado_cliente"),
-            ont_modem_ok   = validated_data.get("ont_modem_ok"),
-            bloque_agendamiento = validated_data.get("bloque_agendamiento"),
-            bloque_llegada      = validated_data.get("bloque_llegada"),
-            bloque_proceso      = validated_data.get("bloque_proceso"),
-            bloque_config       = validated_data.get("bloque_config"),
-            bloque_cierre       = validated_data.get("bloque_cierre"),
-            percepcion          = validated_data.get("percepcion"),
-            descripcion_problema = validated_data.get("descripcion_problema"),
-            marca = asignacion.marca,
-            tecnologia = asignacion.tecnologia,
-            rut_cliente = asignacion.rut_cliente,
-            id_vivienda = asignacion.id_vivienda,
-            direccion_cliente = asignacion.direccion,
-        )
-
-        # Servicios/categorías anidados (opcionales)
-        for s in servicios_data:
-            cats = s.pop("categorias", [])
-            serv = AuditoriaServicio.objects.create(auditoria=auditoria, **s)
-            for c in cats:
-                AuditoriaCategoria.objects.create(auditoria_servicio=serv, **c)
-
-        # Trazabilidad: marcar VISITADA (por si no lo estaba) y guardar historial
-        if asignacion.estado != EstadoAsignacion.VISITADA:
-            asignacion.estado = EstadoAsignacion.VISITADA
-            asignacion.save(update_fields=["estado"])
-        HistorialAsignacion.objects.create(
+        # Construye auditoría con snapshot desde la asignación
+        auditoria = AuditoriaVisita.objects.create(
             asignacion=asignacion,
-            accion=HistorialAsignacion.Accion.AUDITORIA_CREADA,
-            detalles=f"Auditoría {auditoria.id} creada",
-            usuario=self.context.get("request").user if self.context.get("request") else None
+            nombre_auditor=validated_data.get("nombre_auditor", ""),
+            estado_cliente=validated_data.get("estado_cliente", ""),
+            marca=asignacion.marca,
+            tecnologia=asignacion.tecnologia,
+            rut_cliente=asignacion.rut_cliente,
+            id_vivienda=asignacion.id_vivienda,
+            direccion_cliente=asignacion.direccion,
+            # Si el request venía multipart con fotos, DRF setea estos campos solo si están en validated_data;
+            # para soportar eso vía serializer, podrías añadirlos a validated_data si te interesa.
+            foto_1=validated_data.get("foto_1"),
+            foto_2=validated_data.get("foto_2"),
+            foto_3=validated_data.get("foto_3"),
         )
+
+        # Crea issues anidados
+        for it in issues_data:
+            Issue.objects.create(auditoria=auditoria, **it)
 
         return auditoria
-
-class EvidenciaServicioSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = EvidenciaServicio
-        fields = ("id","auditoria","asignacion","tipo","archivo","descripcion","usuario","created_at")
-        read_only_fields = ("usuario","created_at")
