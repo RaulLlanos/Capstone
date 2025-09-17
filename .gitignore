@@ -4,7 +4,7 @@ Proyecto/backend/media/
 .env
 *.log
 .venv
-migrations# Python
+migrations
 Proyecto/backend/venv/
 Proyecto/backend/.venv/
 **/__pycache__/
