@@ -117,6 +117,7 @@ class HistorialAsignacion(models.Model):
         REAGENDADA        = "REAGENDADA",       "Reagendada"
         CERRADA           = "CERRADA",          "Cerrada"
         AUDITORIA_CREADA  = "AUDITORIA_CREADA", "Auditoría creada"
+        EDITADA           = "EDITADA",          "Editada"   # ← NUEVO
 
     asignacion = models.ForeignKey(
         DireccionAsignada, on_delete=models.CASCADE, related_name="historial", verbose_name="Dirección"

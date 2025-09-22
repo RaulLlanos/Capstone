@@ -16,10 +16,9 @@ from drf_spectacular.utils import (
 )
 
 from core.permissions import AdminAuditorFull_TechReadOnlyPlusActions
-from .models import DireccionAsignada, EstadoAsignacion
+from .models import DireccionAsignada, EstadoAsignacion, HistorialAsignacion
 from .serializers import DireccionAsignadaSerializer, DireccionAsignadaListaSerializer
 from usuarios.models import Usuario
-
 
 
 @extend_schema_view(
@@ -56,7 +55,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, AdminAuditorFull_TechReadOnlyPlusActions]
     parser_classes = (JSONParser, MultiPartParser, FormParser)
 
-    tech_allowed_actions = {"asignarme", "estado_cliente", "reagendar", "cerrar"}
+    tech_allowed_actions = {"asignarme", "estado_cliente", "reagendar", "cerrar", "asignar"}  # ← añadimos alias
 
     # filtros básicos (django-filter)
     filterset_fields = [
@@ -71,6 +70,46 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         if self.action in ("list", "disponibles", "mias", "tablero"):
             return DireccionAsignadaListaSerializer
         return DireccionAsignadaSerializer
+
+    # ====== Hooks para historial y restricciones ======
+
+    def perform_update(self, serializer):
+        # Snapshot previo para calcular diff
+        original = DireccionAsignada.objects.get(pk=self.get_object().pk)
+        obj = serializer.save()
+
+        campos = [
+            "fecha","tecnologia","marca","rut_cliente","id_vivienda","direccion",
+            "comuna","zona","encuesta","id_qualtrics","asignado_a","reagendado_fecha",
+            "reagendado_bloque","estado"
+        ]
+        cambios = []
+        for c in campos:
+            before = getattr(original, c)
+            after  = getattr(obj, c)
+            if before != after:
+                if c == "asignado_a":
+                    before = getattr(before, "email", None)
+                    after  = getattr(after,  "email", None)
+                cambios.append(f"{c}: {before} → {after}")
+
+        if cambios:
+            HistorialAsignacion.objects.create(
+                asignacion=obj,
+                accion=HistorialAsignacion.Accion.EDITADA,
+                detalles="; ".join(cambios)[:1000],
+                usuario=getattr(self.request, "user", None),
+            )
+
+    def destroy(self, request, *args, **kwargs):
+        obj = self.get_object()
+        # No borrar visitas completadas
+        if obj.estado == EstadoAsignacion.VISITADA:
+            return Response({"detail": "No se puede borrar una visita completada."}, status=400)
+        # (Opcional) bloquear si tiene auditorías
+        if hasattr(obj, "auditorias") and obj.auditorias.exists():
+            return Response({"detail": "No se puede borrar: la visita tiene auditorías asociadas."}, status=400)
+        return super().destroy(request, *args, **kwargs)
 
     # ---------------------------
     # Acciones de administración
@@ -183,6 +222,43 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         obj.asignado_a = request.user
         obj.estado = EstadoAsignacion.ASIGNADA
         obj.save(update_fields=["asignado_a", "estado", "updated_at"])
+
+        HistorialAsignacion.objects.create(
+            asignacion=obj,
+            accion=HistorialAsignacion.Accion.ASIGNADA_TECNICO,
+            detalles=f"Asignada a {request.user.email} (POST /asignarme)",
+            usuario=getattr(request, "user", None),
+        )
+        return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
+
+    @extend_schema(
+        summary="Autoasignar (alias PATCH /visitas/:id/asignar)",
+        responses=DireccionAsignadaSerializer,
+    )
+    @action(detail=True, methods=["patch"], url_path="asignar")
+    def asignar(self, request, pk=None):
+        """
+        Alias requerido por rúbrica: PATCH /visitas/:id/asignar
+        Ejecuta la misma lógica que POST /asignarme/
+        """
+        obj = self.get_object()
+        if request.user.rol != "tecnico":
+            return Response({"detail": "Solo técnicos pueden asignarse direcciones."}, status=403)
+        if obj.asignado_a_id:
+            return Response({"detail": f"No disponible: ya asignada a {obj.asignado_a.email}."}, status=400)
+        if obj.estado != EstadoAsignacion.PENDIENTE:
+            return Response({"detail": f"No disponible: estado actual={obj.estado} (requiere PENDIENTE)."}, status=400)
+
+        obj.asignado_a = request.user
+        obj.estado = EstadoAsignacion.ASIGNADA
+        obj.save(update_fields=["asignado_a", "estado", "updated_at"])
+
+        HistorialAsignacion.objects.create(
+            asignacion=obj,
+            accion=HistorialAsignacion.Accion.ASIGNADA_TECNICO,
+            detalles=f"Asignada a {request.user.email} (PATCH /asignar)",
+            usuario=getattr(request, "user", None),
+        )
         return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
 
     @extend_schema(
@@ -257,6 +333,12 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         if estado == "autoriza":
             obj.estado = EstadoAsignacion.VISITADA
             obj.save(update_fields=["estado", "updated_at"])
+            HistorialAsignacion.objects.create(
+                asignacion=obj,
+                accion=HistorialAsignacion.Accion.ESTADO_CLIENTE,
+                detalles="estado_cliente=autoriza → VISITADA",
+                usuario=getattr(request, "user", None),
+            )
             return Response({"next": "auditoria", "asignacion": DireccionAsignadaSerializer(obj).data})
 
         if estado == "reagendo":
@@ -274,11 +356,23 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             obj.reagendado_bloque = bloque
             obj.estado = EstadoAsignacion.REAGENDADA
             obj.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
+            HistorialAsignacion.objects.create(
+                asignacion=obj,
+                accion=HistorialAsignacion.Accion.REAGENDADA,
+                detalles=f"Reagendó a {fecha} {bloque}",
+                usuario=getattr(request, "user", None),
+            )
             return Response({"next": "gracias", "asignacion": DireccionAsignadaSerializer(obj).data})
 
         if estado in ("sin_moradores", "rechaza", "contingencia", "masivo"):
             obj.estado = EstadoAsignacion.VISITADA
             obj.save(update_fields=["estado", "updated_at"])
+            HistorialAsignacion.objects.create(
+                asignacion=obj,
+                accion=HistorialAsignacion.Accion.ESTADO_CLIENTE,
+                detalles=f"estado_cliente={estado} → VISITADA",
+                usuario=getattr(request, "user", None),
+            )
             return Response({"next": "gracias", "asignacion": DireccionAsignadaSerializer(obj).data})
 
         return Response({"detail": "estado_cliente inválido."}, status=400)
@@ -316,6 +410,13 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         obj.estado = EstadoAsignacion.REAGENDADA
         obj.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
 
+        HistorialAsignacion.objects.create(
+            asignacion=obj,
+            accion=HistorialAsignacion.Accion.REAGENDADA,
+            detalles=f"Reagendado a {fecha} {bloque} (acción directa)",
+            usuario=getattr(request, "user", None),
+        )
+
         return Response(DireccionAsignadaSerializer(obj).data)
 
     @extend_schema(
@@ -336,6 +437,14 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
         obj.estado = EstadoAsignacion.VISITADA
         obj.save(update_fields=["estado", "updated_at"])
+
+        HistorialAsignacion.objects.create(
+            asignacion=obj,
+            accion=HistorialAsignacion.Accion.CERRADA,
+            detalles=f"Cerrada por motivo={motivo}",
+            usuario=getattr(request, "user", None),
+        )
+
         return Response(DireccionAsignadaSerializer(obj).data)
 
     @extend_schema(summary="Mis direcciones (técnico)", responses=DireccionAsignadaListaSerializer)
@@ -350,7 +459,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             return self.get_paginated_response(self.get_serializer(page, many=True).data)
         return Response(self.get_serializer(qs, many=True).data)
 
-    # ---- NUEVO: disponibles (pendientes y sin técnico), con filtros
     @extend_schema(
         summary="Direcciones disponibles para asignarme (técnico)",
         parameters=[
@@ -403,7 +511,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             return self.get_paginated_response(self.get_serializer(page, many=True).data)
         return Response(self.get_serializer(qs, many=True).data)
 
-    # ---- NUEVO: tablero (mías + disponibles) para pintar dos listas
     @extend_schema(
         summary="Tablero del técnico: mías + disponibles",
         parameters=[
