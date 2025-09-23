@@ -1,6 +1,6 @@
 // src/pages/AuditorDireccionAdd.jsx
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+//import { useNavigate } from "react-router-dom";
 import api from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import styles from "./Login.module.css";
@@ -34,7 +34,7 @@ const CANDIDATE_ENDPOINTS = ["/api/direcciones/", "/api/asignaciones/"];
 
 export default function AuditorDireccionAdd() {
   const { user } = useAuth();
-  const navigate = useNavigate();
+  //const navigate = useNavigate();
 
   // (defensa extra; igual protege la ruta en AppRouter)
   if (user && (user.rol || user.role) !== "auditor") {

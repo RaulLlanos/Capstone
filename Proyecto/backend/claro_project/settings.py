@@ -103,7 +103,7 @@ DATABASES = {
     "default": dj_database_url.config(
         env="DATABASE_URL",
         conn_max_age=600,
-        ssl_require=False,   # necesario en Supabase
+        ssl_require=True,   # necesario en Supabase
     )
 }
 # Si quieres usar un esquema propio más adelante:

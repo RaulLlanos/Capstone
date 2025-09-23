@@ -7,6 +7,7 @@ import TecnicoDashboard from "../pages/Tecnico";
 import Registro from "../pages/Registro";
 import Login from "../pages/Login";
 import AuditorDireccionAdd from "../pages/AuditorDireccionAdd";
+import TecnicoDireccionesLista from "../pages/TecnicoDireccionesLista";
 
 function RequireAuth() {
   const { user } = useAuth();
@@ -69,6 +70,7 @@ export default function AppRouter() {
           {/* TECNICO */}
           <Route element={<RequireRole allowed={["tecnico"]} />}>
             <Route path="/tecnico" element={<TecnicoDashboard />} />
+            <Route path="/tecnico/direcciones" element={<TecnicoDireccionesLista />} />
           </Route>
         </Route>
 
