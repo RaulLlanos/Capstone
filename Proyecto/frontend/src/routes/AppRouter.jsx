@@ -6,6 +6,7 @@ import AuditorDashboard from "../pages/Auditor";
 import TecnicoDashboard from "../pages/Tecnico";
 import Registro from "../pages/Registro";
 import Login from "../pages/Login";
+import AuditorDireccionAdd from "../pages/AuditorDireccionAdd";
 
 function RequireAuth() {
   const { user } = useAuth();
@@ -62,6 +63,7 @@ export default function AppRouter() {
           <Route element={<RequireRole allowed={["auditor"]} />}>
             <Route path="/auditor" element={<AuditorDashboard />} />
             <Route path="/registro" element={<Registro />} /> {/* <- solo auditor */}
+            <Route path="/auditor/direcciones/nueva" element={<AuditorDireccionAdd />} />
           </Route>
 
           {/* TECNICO */}

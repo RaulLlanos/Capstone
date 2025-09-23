@@ -37,13 +37,16 @@ export default function NavBar() {
           <>
             {/* Botón visible solo para AUDITOR */}
             {isAuditor && (
-              <Link
+              <><Link
                 to="/registro"
                 // Si tienes otra clase para botón principal, reemplaza logoutBtn por esa (ej: styles.primaryBtn)
                 className={styles.logoutBtn}
               >
                 + Crear usuario
               </Link>
+              <Link to="/auditor/direcciones/nueva" className={styles.logoutBtn}>
+                  + Añadir dirección
+              </Link></>
             )}
 
             <div className={styles.userBadge} title={user.name || ""}>
