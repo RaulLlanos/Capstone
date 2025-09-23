@@ -55,7 +55,8 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, AdminAuditorFull_TechReadOnlyPlusActions]
     parser_classes = (JSONParser, MultiPartParser, FormParser)
 
-    tech_allowed_actions = {"asignarme", "estado_cliente", "reagendar", "cerrar", "asignar"}  # ← añadimos alias
+    # Acciones permitidas para técnicos (POST) en esta vista
+    tech_allowed_actions = {"asignarme", "estado_cliente", "reagendar", "cerrar", "asignar"}
 
     # filtros básicos (django-filter)
     filterset_fields = [
@@ -66,7 +67,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     search_fields = ["direccion", "comuna", "rut_cliente", "id_vivienda", "id_qualtrics"]
 
     def get_serializer_class(self):
-        # Listas “ligeras” para que el front muestre tabla simple
+        # Listas “ligeras” para tabla simple en front
         if self.action in ("list", "disponibles", "mias", "tablero"):
             return DireccionAsignadaListaSerializer
         return DireccionAsignadaSerializer
@@ -103,12 +104,19 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         obj = self.get_object()
+
+        # Solo auditor puede eliminar por API
+        if getattr(request.user, "rol", None) != "auditor":
+            return Response({"detail": "Solo auditor puede eliminar visitas por API."}, status=403)
+
         # No borrar visitas completadas
         if obj.estado == EstadoAsignacion.VISITADA:
             return Response({"detail": "No se puede borrar una visita completada."}, status=400)
+
         # (Opcional) bloquear si tiene auditorías
         if hasattr(obj, "auditorias") and obj.auditorias.exists():
             return Response({"detail": "No se puede borrar: la visita tiene auditorías asociadas."}, status=400)
+
         return super().destroy(request, *args, **kwargs)
 
     # ---------------------------
@@ -259,6 +267,54 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             detalles=f"Asignada a {request.user.email} (PATCH /asignar)",
             usuario=getattr(request, "user", None),
         )
+        return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
+
+    # ===== NUEVO: Asignar visita a un técnico (auditor) =====
+    @extend_schema(
+        summary="Asignar visita a un técnico (solo auditor)",
+        description="Permite a un auditor asignar una visita PENDIENTE a un técnico específico.",
+        request={'application/json': {
+            'type': 'object',
+            'properties': {'tecnico_id': {'type': 'integer'}},
+            'required': ['tecnico_id'],
+        }},
+        responses=DireccionAsignadaSerializer,
+    )
+    @action(detail=True, methods=["patch"], url_path="asignar_a")
+    def asignar_a(self, request, pk=None):
+        u = request.user
+        if getattr(u, "rol", None) != "auditor":
+            return Response({"detail": "Solo auditor puede asignar visitas."}, status=403)
+
+        obj = self.get_object()
+
+        # Reglas: no tomada y en estado PENDIENTE
+        if obj.asignado_a_id:
+            return Response({"detail": f"No disponible: ya asignada a {obj.asignado_a.email}."}, status=400)
+        if obj.estado != EstadoAsignacion.PENDIENTE:
+            return Response({"detail": f"No disponible: estado actual={obj.estado} (requiere PENDIENTE)."}, status=400)
+
+        try:
+            tecnico_id = int(request.data.get("tecnico_id"))
+        except (TypeError, ValueError):
+            return Response({"detail": "tecnico_id inválido."}, status=400)
+
+        try:
+            tecnico = Usuario.objects.get(id=tecnico_id, rol="tecnico")
+        except Usuario.DoesNotExist:
+            return Response({"detail": "Técnico no encontrado o no es rol=tecnico."}, status=404)
+
+        obj.asignado_a = tecnico
+        obj.estado = EstadoAsignacion.ASIGNADA
+        obj.save(update_fields=["asignado_a", "estado", "updated_at"])
+
+        HistorialAsignacion.objects.create(
+            asignacion=obj,
+            accion=HistorialAsignacion.Accion.ASIGNADA_TECNICO,
+            detalles=f"Asignada por auditor a {tecnico.email} (PATCH /asignar_a)",
+            usuario=getattr(request, "user", None),
+        )
+
         return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
 
     @extend_schema(
