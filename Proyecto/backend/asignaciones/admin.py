@@ -97,7 +97,6 @@ class ReagendamientoAdmin(admin.ModelAdmin):
 
         # Setea el usuario (si lo dejaste vacío)
         if not obj.usuario_id:
-            # si el que guarda es técnico, úsalo; si es auditor, puedes elegirlo manual
             obj.usuario = request.user if getattr(request.user, "rol", None) == "tecnico" else obj.usuario
 
         super().save_model(request, obj, form, change)
@@ -123,8 +122,11 @@ class HistorialAsignacionAdmin(admin.ModelAdmin):
     search_fields = ("detalles", "asignacion__direccion", "usuario__email")
     readonly_fields = ("asignacion", "accion", "detalles", "usuario", "created_at")
 
-    # Hacerlo solo lectura en admin (se genera automático)
+    # Solo lectura en admin (se genera automático)
     def has_add_permission(self, request):
         return False
     def has_change_permission(self, request, obj=None):
         return False
+    def has_delete_permission(self, request, obj=None):
+        # Solo superusuario puede borrar entradas del historial
+        return bool(getattr(request.user, "is_superuser", False))
