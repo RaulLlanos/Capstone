@@ -12,21 +12,25 @@ export default function NavBar() {
   if (location.pathname === "/login") return null;
 
   const handleLogout = () => {
-    // opcional: limpiar última ruta guardada
     localStorage.removeItem("lastRoute");
     logout();
     navigate("/login", { replace: true });
   };
 
-  const initial = user?.name?.[0]?.toUpperCase() || "?";
+  // Inicial del usuario (si no viene name, usa email)
+  const displayName = user?.name || user?.email || "Usuario";
+  const initial = (displayName[0] || "?").toUpperCase();
+
+  // Roles (tu backend usa lowercase)
   const isAuditor = user?.role === "auditor";
+  const isTecnico = user?.role === "tecnico";
   const roleLabel = isAuditor ? "Auditor" : "Técnico";
 
   return (
     <header className={styles.header}>
       <div className={styles.left}>
         <Link to="/" className={styles.brand}>
-          {/* tu logo si quieres <img src="/logo.svg" alt="logo" /> */}
+          <img src="assets/logo.png" alt="logo" /> 
           <span className={styles.logoDot} />
           <span className={styles.brandText}>Gestión Técnicos</span>
         </Link>
@@ -35,21 +39,29 @@ export default function NavBar() {
       <div className={styles.right}>
         {user && (
           <>
-            {/* Botón visible solo para AUDITOR */}
+            {/* Acciones según rol */}
             {isAuditor && (
-              <Link
-                to="/registro"
-                // Si tienes otra clase para botón principal, reemplaza logoutBtn por esa (ej: styles.primaryBtn)
-                className={styles.logoutBtn}
-              >
-                + Crear usuario
+              <>
+                <Link to="/registro" className={styles.logoutBtn}>
+                  + Crear usuario
+                </Link>
+                <Link to="/auditor/direcciones/nueva" className={styles.logoutBtn}>
+                  + Añadir dirección
+                </Link>
+              </>
+            )}
+
+            {isTecnico && (
+              <Link to="/tecnico/direcciones" className={styles.logoutBtn}>
+                Direcciones
               </Link>
             )}
 
-            <div className={styles.userBadge} title={user.name || ""}>
+            {/* Badge de usuario */}
+            <div className={styles.userBadge} title={displayName}>
               <div className={styles.avatar}>{initial}</div>
               <div className={styles.userInfo}>
-                <div className={styles.userName}>{user.name || "Usuario"}</div>
+                <div className={styles.userName}>{displayName}</div>
                 <div
                   className={`${styles.role} ${
                     isAuditor ? styles.roleAuditor : styles.roleTecnico
