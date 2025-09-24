@@ -8,6 +8,8 @@ import Registro from "../pages/Registro";
 import Login from "../pages/Login";
 import AuditorDireccionAdd from "../pages/AuditorDireccionAdd";
 import TecnicoDireccionesLista from "../pages/TecnicoDireccionesLista";
+import AuditorDireccionesLista from "../pages/AuditorDireccionesLista";
+import AuditorDireccionEdit from "../pages/AuditorDireccionEdit";
 
 function RequireAuth() {
   const { user } = useAuth();
@@ -65,6 +67,8 @@ export default function AppRouter() {
             <Route path="/auditor" element={<AuditorDashboard />} />
             <Route path="/registro" element={<Registro />} /> {/* <- solo auditor */}
             <Route path="/auditor/direcciones/nueva" element={<AuditorDireccionAdd />} />
+            <Route path="/auditor/direcciones" element={<AuditorDireccionesLista />} />
+            <Route path="/auditor/direcciones/:id/editar" element={<AuditorDireccionEdit />} />
           </Route>
 
           {/* TECNICO */}

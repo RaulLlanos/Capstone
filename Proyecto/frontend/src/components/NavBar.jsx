@@ -48,6 +48,9 @@ export default function NavBar() {
                 <Link to="/auditor/direcciones/nueva" className={styles.logoutBtn}>
                   + Añadir dirección
                 </Link>
+                <Link to="/auditor/direcciones" className={styles.logoutBtn}>
+                  Ver direcciones
+                </Link>
               </>
             )}
 
