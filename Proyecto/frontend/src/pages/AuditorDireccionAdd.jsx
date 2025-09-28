@@ -1,5 +1,5 @@
 // src/pages/AuditorDireccionAdd.jsx
-import { useState } from "react";
+import { useMemo, useState } from "react";
 //import { useNavigate } from "react-router-dom";
 import api from "../services/api";
 import { useAuth } from "../context/AuthContext";
@@ -22,6 +22,24 @@ const ZONAS = [
   { value: "CENTRO", label: "Centro" },
   { value: "SUR",    label: "Sur"    },
 ];
+
+// Comunas de Santiago agrupadas por zona (ajústalas si quieres)
+const COMUNAS_POR_ZONA = {
+  NORTE: [
+    "Huechuraba", "Recoleta", "Independencia", "Conchalí",
+    "Quilicura", "Renca", "Vitacura", "Las Condes", "Lo Barnechea"
+  ],
+  CENTRO: [
+    "Santiago", "Providencia", "Ñuñoa", "Macul", "La Reina",
+    "Estación Central", "Quinta Normal", "Pedro Aguirre Cerda",
+    "San Miguel", "Cerrillos", "Maipú", "Pudahuel", "Lo Prado"
+  ],
+  SUR: [
+    "San Joaquín", "La Cisterna", "San Ramón", "La Granja",
+    "El Bosque", "La Pintana", "Lo Espejo", "San Bernardo",
+    "Puente Alto", "Pirque"
+  ],
+};
 
 const ENCUESTAS = [
   { value: "post_visita", label: "post visita"   },
@@ -59,9 +77,22 @@ export default function AuditorDireccionAdd() {
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
 
+  // Comunas disponibles según la zona elegida
+  const comunasOptions = useMemo(
+    () => (COMUNAS_POR_ZONA[form.zona] ?? []),
+    [form.zona]
+  );
+
   const onChange = (e) => {
     const { name, value } = e.target;
-    setForm((f) => ({ ...f, [name]: value }));
+    setForm((f) => {
+      if (name === "zona") {
+        const nuevas = COMUNAS_POR_ZONA[value] ?? [];
+        const comunaValida = nuevas.includes(f.comuna) ? f.comuna : "";
+        return { ...f, zona: value, comuna: comunaValida };
+      }
+      return { ...f, [name]: value };
+    });
     setFieldErrors((fe) => ({ ...fe, [name]: "" }));
     setOk("");
     setError("");
@@ -89,10 +120,9 @@ export default function AuditorDireccionAdd() {
       try {
         return await api.post(path, payload);
       } catch (err) {
-        // si 404, probamos el siguiente; para otros códigos guardamos y re-lanzamos al final
         const status = err?.response?.status;
         lastErr = err;
-        if (status === 404) continue;
+        if (status === 404) continue; // intenta el siguiente
         throw err;
       }
     }
@@ -117,16 +147,16 @@ export default function AuditorDireccionAdd() {
 
       // Nombres EXACTOS que espera el serializer:
       const payload = {
-        fecha: form.fecha,                                      // DateField
-        tecnologia: form.tecnologia,                            // CharField (choice)
-        marca: form.marca,                                      // CharField (choice)
-        rut_cliente: form.rut_cliente.trim(),                   // CharField
-        id_vivienda: form.id_vivienda.trim(),                   // CharField
-        direccion: form.direccion.trim(),                       // CharField
-        comuna: form.comuna.trim(),                             // CharField
-        zona: form.zona,                                        // CharField (choice)
-        encuesta: form.encuesta,                                // CharField (choice)
-        id_qualtrics: form.id_qualtrics.trim() || "",           // CharField (blank ok)
+        fecha: form.fecha,                                  // DateField
+        tecnologia: form.tecnologia,                        // CharField (choice)
+        marca: form.marca,                                  // CharField (choice)
+        rut_cliente: form.rut_cliente.trim(),               // CharField
+        id_vivienda: form.id_vivienda.trim(),               // CharField
+        direccion: form.direccion.trim(),                   // CharField
+        comuna: form.comuna.trim(),                         // CharField
+        zona: form.zona,                                    // CharField (choice)
+        encuesta: form.encuesta,                            // CharField (choice)
+        id_qualtrics: form.id_qualtrics.trim() || "",       // CharField (blank ok)
         // NO enviar: estado, reagendado_fecha, reagendado_bloque, asignado_a
       };
 
@@ -198,18 +228,7 @@ export default function AuditorDireccionAdd() {
             {fieldErrors.direccion && <small className={styles.error}>{fieldErrors.direccion}</small>}
           </label>
 
-          <label className={styles.label}>
-            Comuna
-            <input
-              className={styles.input}
-              name="comuna"
-              value={form.comuna}
-              onChange={onChange}
-              disabled={loading}
-            />
-            {fieldErrors.comuna && <small className={styles.error}>{fieldErrors.comuna}</small>}
-          </label>
-
+          {/* Comuna dependiente de Zona */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
             <label className={styles.label} style={{ margin: 0 }}>
               Zona
@@ -229,6 +248,23 @@ export default function AuditorDireccionAdd() {
             </label>
 
             <label className={styles.label} style={{ margin: 0 }}>
+              Comuna
+              <select
+                className={styles.select}
+                name="comuna"
+                value={form.comuna}
+                onChange={onChange}
+                disabled={loading || !form.zona}
+              >
+                <option value="">{form.zona ? "— seleccionar —" : "Selecciona zona primero"}</option>
+                {comunasOptions.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              {fieldErrors.comuna && <small className={styles.error}>{fieldErrors.comuna}</small>}
+            </label>
+
+            <label className={styles.label} style={{ margin: 0 }}>
               Marca
               <select
                 className={styles.select}
@@ -244,7 +280,9 @@ export default function AuditorDireccionAdd() {
               </select>
               {fieldErrors.marca && <small className={styles.error}>{fieldErrors.marca}</small>}
             </label>
+          </div>
 
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <label className={styles.label} style={{ margin: 0 }}>
               Tecnología
               <select
@@ -260,6 +298,18 @@ export default function AuditorDireccionAdd() {
                 ))}
               </select>
               {fieldErrors.tecnologia && <small className={styles.error}>{fieldErrors.tecnologia}</small>}
+            </label>
+
+            <label className={styles.label} style={{ margin: 0 }}>
+              ID vivienda
+              <input
+                className={styles.input}
+                name="id_vivienda"
+                value={form.id_vivienda}
+                onChange={onChange}
+                disabled={loading}
+              />
+              {fieldErrors.id_vivienda && <small className={styles.error}>{fieldErrors.id_vivienda}</small>}
             </label>
           </div>
 
@@ -278,20 +328,6 @@ export default function AuditorDireccionAdd() {
             </label>
 
             <label className={styles.label} style={{ margin: 0 }}>
-              ID vivienda
-              <input
-                className={styles.input}
-                name="id_vivienda"
-                value={form.id_vivienda}
-                onChange={onChange}
-                disabled={loading}
-              />
-              {fieldErrors.id_vivienda && <small className={styles.error}>{fieldErrors.id_vivienda}</small>}
-            </label>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <label className={styles.label} style={{ margin: 0 }}>
               Encuesta de origen
               <select
                 className={styles.select}
@@ -307,20 +343,20 @@ export default function AuditorDireccionAdd() {
               </select>
               {fieldErrors.encuesta && <small className={styles.error}>{fieldErrors.encuesta}</small>}
             </label>
-
-            <label className={styles.label} style={{ margin: 0 }}>
-              ID Qualtrics (opcional)
-              <input
-                className={styles.input}
-                name="id_qualtrics"
-                value={form.id_qualtrics}
-                onChange={onChange}
-                disabled={loading}
-                placeholder="p.ej. SV_abc123"
-              />
-              {fieldErrors.id_qualtrics && <small className={styles.error}>{fieldErrors.id_qualtrics}</small>}
-            </label>
           </div>
+
+          <label className={styles.label}>
+            ID Qualtrics (opcional)
+            <input
+              className={styles.input}
+              name="id_qualtrics"
+              value={form.id_qualtrics}
+              onChange={onChange}
+              disabled={loading}
+              placeholder="p.ej. SV_abc123"
+            />
+            {fieldErrors.id_qualtrics && <small className={styles.error}>{fieldErrors.id_qualtrics}</small>}
+          </label>
 
           {error && <div className={styles.error}>{error}</div>}
           {ok && <div className={styles.success}>{ok}</div>}

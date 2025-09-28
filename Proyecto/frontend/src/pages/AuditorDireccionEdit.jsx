@@ -1,5 +1,6 @@
+/* eslint-disable no-unused-vars */
 // src/pages/AuditorDireccionEdit.jsx
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../services/api";
 import { useAuth } from "../context/AuthContext";
@@ -9,7 +10,35 @@ const MARCAS = ["CLARO", "VTR"];
 const TECNOLOGIAS = ["HFC", "NFTT", "FTTH"];
 const ZONAS = ["NORTE", "CENTRO", "SUR"];
 const ENCUESTAS = ["post_visita", "instalacion", "operaciones"];
-const ESTADOS = ["PENDIENTE", "ASIGNADA", "COMPLETADA", "CANCELADA"]; // backend en uppercase
+const ESTADOS = ["PENDIENTE", "ASIGNADA", "COMPLETADA", "CANCELADA"]; // backend uppercase
+
+// Comunas de Santiago agrupadas por zona
+const COMUNAS_POR_ZONA = {
+  NORTE: [
+    "Huechuraba", "Recoleta", "Independencia", "Conchalí",
+    "Quilicura", "Renca", "Vitacura", "Las Condes", "Lo Barnechea"
+  ],
+  CENTRO: [
+    "Santiago", "Providencia", "Ñuñoa", "Macul", "La Reina",
+    "Estación Central", "Quinta Normal", "Pedro Aguirre Cerda",
+    "San Miguel", "Cerrillos", "Maipú", "Pudahuel", "Lo Prado"
+  ],
+  SUR: [
+    "San Joaquín", "La Cisterna", "San Ramón", "La Granja",
+    "El Bosque", "La Pintana", "Lo Espejo", "San Bernardo",
+    "Puente Alto", "Pirque"
+  ],
+};
+
+// Endpoints candidatos para listar usuarios técnicos
+const TECH_ENDPOINTS = [
+  "/api/usuarios/?role=tecnico",
+  "/auth/users/?role=tecnico",
+  "/api/users/?role=tecnico",
+  "/api/usuarios/",
+  "/auth/users/",
+  "/api/users/",
+];
 
 export default function AuditorDireccionEdit() {
   const { id } = useParams();
@@ -32,20 +61,67 @@ export default function AuditorDireccionEdit() {
     encuesta: "",
     id_qualtrics: "",
     estado: "PENDIENTE",
-    asignado_a: "", // email/identificador o vacío para null
+    // ⚠️ este es el que usa el backend para asignar (FK):
+    tecnico: "", // value = id del usuario técnico; "" = sin asignar
   });
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
 
+  // Técnicos para el dropdown
+  const [techs, setTechs] = useState([{ value: "", label: "Sin asignar" }]);
+  const [loadingTechs, setLoadingTechs] = useState(true);
+
+  // Comunas disponibles según la zona elegida
+  const comunasOptions = useMemo(
+    () => (COMUNAS_POR_ZONA[form.zona] ?? []),
+    [form.zona]
+  );
+
+  // Normaliza un array de usuarios cualquiera a [{value:<id>, label:<nombre/email>, role}]
+  const normalizeUsers = (raw) => {
+    const arr = Array.isArray(raw?.results) ? raw.results : Array.isArray(raw) ? raw : [];
+    return arr
+      .map((u) => {
+        const id = u.id ?? u.pk ?? null;
+        const email = u.email ?? u.user?.email ?? u.username ?? "";
+        const role = (u.role ?? u.rol ?? "").toString().toLowerCase();
+        const name =
+          u.name ||
+          (u.first_name || u.last_name ? `${u.first_name || ""} ${u.last_name || ""}`.trim() : "") ||
+          u.full_name ||
+          u.display_name ||
+          "";
+        const label = [name, email].filter(Boolean).join(" — ") || email || name || `Técnico #${id ?? "?"}`;
+        if (!id) return null;
+        return { value: String(id), label, role };
+      })
+      .filter(Boolean);
+  };
+
+  // Cargar detalle
   useEffect(() => {
     (async () => {
       try {
         setLoading(true);
         const res = await api.get(`/api/asignaciones/${id}/`);
         const d = res.data || {};
+
+        // d.tecnico puede venir como id, null o incluso objeto; soportamos los tres
+        let tecnicoValue = "";
+        if (d.tecnico === null || d.tecnico === undefined || d.tecnico === "") {
+          tecnicoValue = "";
+        } else if (typeof d.tecnico === "object") {
+          // Intenta id dentro del objeto
+          tecnicoValue = d.tecnico.id ? String(d.tecnico.id) : "";
+        } else {
+          // número o string
+          tecnicoValue = String(d.tecnico);
+        }
+
         setForm({
           fecha: d.fecha || "",
           direccion: d.direccion || "",
@@ -58,7 +134,7 @@ export default function AuditorDireccionEdit() {
           encuesta: d.encuesta || "",
           id_qualtrics: d.id_qualtrics || "",
           estado: (d.estado || "PENDIENTE").toUpperCase(),
-          asignado_a: d.asignado_a || "",
+          tecnico: tecnicoValue, // id o ""
         });
       } catch (err) {
         console.error("GET detalle falló:", err?.response?.status, err?.response?.data);
@@ -69,9 +145,39 @@ export default function AuditorDireccionEdit() {
     })();
   }, [id]);
 
+  // Cargar técnicos (intenta endpoints con ?role=tecnico; si no, filtra en frontend)
+  useEffect(() => {
+    (async () => {
+      setLoadingTechs(true);
+      let loaded = [];
+      for (const ep of TECH_ENDPOINTS) {
+        try {
+          const res = await api.get(ep);
+          loaded = normalizeUsers(res.data);
+          if (loaded.length) break;
+        } catch (_) {
+          // probar siguiente
+        }
+      }
+      // Si el endpoint no filtró, nos quedamos solo con role=tecnico
+      const onlyTechs = loaded.filter((t) => t.role === "tecnico");
+      const finalList = onlyTechs.length ? onlyTechs : loaded;
+      setTechs([{ value: "", label: "Sin asignar" }, ...finalList.map(({ value, label }) => ({ value, label }))]);
+      setLoadingTechs(false);
+    })();
+  }, []);
+
   const onChange = (e) => {
     const { name, value } = e.target;
-    setForm((f) => ({ ...f, [name]: value }));
+    setForm((f) => {
+      // Si cambia la zona, limpiar comuna si no pertenece a la nueva zona
+      if (name === "zona") {
+        const nuevas = COMUNAS_POR_ZONA[value] ?? [];
+        const comunaValida = nuevas.includes(f.comuna) ? f.comuna : "";
+        return { ...f, zona: value, comuna: comunaValida };
+      }
+      return { ...f, [name]: value };
+    });
     setFieldErrors((fe) => ({ ...fe, [name]: "" }));
     setOk("");
     setError("");
@@ -92,7 +198,7 @@ export default function AuditorDireccionEdit() {
     return fe;
   };
 
-  // Construye SIEMPRE el objeto completo (evita KeyError en validadores del backend)
+  // Construye SIEMPRE el objeto completo: el backend lo prefiere
   const buildFullPayload = () => ({
     fecha: form.fecha,
     tecnologia: form.tecnologia,
@@ -105,8 +211,9 @@ export default function AuditorDireccionEdit() {
     encuesta: form.encuesta,
     id_qualtrics: form.id_qualtrics.trim() || "",
     estado: String(form.estado || "PENDIENTE").toUpperCase(),
-    // si va vacío, mejor null que string vacío
-    asignado_a: form.asignado_a.trim() ? form.asignado_a.trim() : null,
+    // 👇 clave: enviar FK 'tecnico' como ID o null (aunque el backend hoy no lo aplique)
+    tecnico: form.tecnico ? Number(form.tecnico) : null,
+    // NO enviar 'asignado_a' (es de solo lectura)
   });
 
   const handleSave = async (e) => {
@@ -127,11 +234,9 @@ export default function AuditorDireccionEdit() {
 
       const payload = buildFullPayload();
 
-      // Preferimos PUT (objeto completo) para satisfacer validadores que exigen todos los campos
       try {
         await api.put(`/api/asignaciones/${id}/`, payload);
       } catch (err) {
-        // Si PUT no está permitido, intentamos PATCH con el mismo objeto completo
         if (err?.response?.status === 405) {
           await api.patch(`/api/asignaciones/${id}/`, payload);
         } else {
@@ -185,9 +290,21 @@ export default function AuditorDireccionEdit() {
               {fieldErrors.direccion && <small className={styles.error}>{fieldErrors.direccion}</small>}
             </label>
 
+            {/* Comuna dependiente de Zona */}
             <label className={styles.label}>
               Comuna
-              <input className={styles.input} name="comuna" value={form.comuna} onChange={onChange} disabled={saving}/>
+              <select
+                className={styles.select}
+                name="comuna"
+                value={form.comuna}
+                onChange={onChange}
+                disabled={saving || !form.zona}
+              >
+                <option value="">{form.zona ? "— seleccionar —" : "Selecciona zona primero"}</option>
+                {comunasOptions.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
               {fieldErrors.comuna && <small className={styles.error}>{fieldErrors.comuna}</small>}
             </label>
 
@@ -251,7 +368,7 @@ export default function AuditorDireccionEdit() {
               </label>
             </div>
 
-            {/* Estado y asignado_a */}
+            {/* Estado y Técnico (asignación real) */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <label className={styles.label} style={{ margin: 0 }}>
                 Estado
@@ -262,9 +379,22 @@ export default function AuditorDireccionEdit() {
               </label>
 
               <label className={styles.label} style={{ margin: 0 }}>
-                Asignado a (email o identificador)
-                <input className={styles.input} name="asignado_a" value={form.asignado_a} onChange={onChange} disabled={saving} placeholder="ej: tecnico@dominio.cl"/>
-                {fieldErrors.asignado_a && <small className={styles.error}>{fieldErrors.asignado_a}</small>}
+                Técnico asignado
+                <select
+                  className={styles.select}
+                  name="tecnico"
+                  value={form.tecnico}
+                  onChange={onChange}
+                  disabled={saving || loadingTechs}
+                >
+                  {techs.map((t) => (
+                    <option key={t.value || "__none"} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+                {loadingTechs && <small className={styles.helper}>Cargando técnicos…</small>}
+                {fieldErrors.tecnico && <small className={styles.error}>{fieldErrors.tecnico}</small>}
               </label>
             </div>
 
@@ -272,8 +402,12 @@ export default function AuditorDireccionEdit() {
             {ok && <div className={styles.success}>{ok}</div>}
 
             <div className={styles.actions}>
-              <button type="submit" className={styles.button} disabled={saving}>{saving ? "Guardando…" : "Guardar cambios"}</button>
-              <button type="button" className={styles.button} onClick={() => navigate(-1)} disabled={saving}>Volver</button>
+              <button type="submit" className={styles.button} disabled={saving}>
+                {saving ? "Guardando…" : "Guardar cambios"}
+              </button>
+              <button type="button" className={styles.button} onClick={() => navigate(-1)} disabled={saving}>
+                Volver
+              </button>
             </div>
           </form>
         )}

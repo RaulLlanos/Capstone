@@ -183,7 +183,7 @@ export default function AuditorDireccionesLista() {
                   <td>{it.marca}</td>
                   <td>{it.tecnologia}</td>
                   <td>{String(it.estado || "")}</td>
-                  <td>{it.asignado_a || "—"}</td>
+                  <td>{(it.tecnico && (it.tecnico.nombre || it.tecnico.email)) || it.asignado_a || "—"}</td>
                   <td>{it.id_vivienda}</td>
                   <td>{it.encuesta}</td>
                   <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
