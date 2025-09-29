@@ -1,212 +1,292 @@
 // src/pages/Tecnico.jsx
-import { useEffect, useMemo, useState } from "react";
-import styles from "./Tecnico.module.css";
-import {
-  fetchVisitasDeHoy,
-  patchEstadoVisita,
-  patchReagendarVisita, // usamos la opción simple
-} from "../services/visitas";
+import { useEffect, useMemo, useRef, useState } from "react";
+import api from "../services/api";
+import { useAuth } from "../context/AuthContext";
+import styles from "./Login.module.css";
 
-const ESTADOS = ["programada", "en_curso", "completada", "reagendada", "cancelada"];
-const LS_Q = "tecnico:q";
-const LS_F_ESTADO = "tecnico:fEstado";
-const LS_LAST_VISIT = "tecnico:lastVisitId";
+const ESTADOS = ["PENDIENTE", "ASIGNADA", "COMPLETADA", "CANCELADA"];
+const TECNOLOGIAS = ["HFC", "NFTT", "FTTH"];
+const MARCAS = ["CLARO", "VTR"];
+const ZONAS = ["NORTE", "CENTRO", "SUR"];
+
+// normaliza respuesta: lista directa o paginada
+function normalizeList(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.results)) return data.results;
+  return [];
+}
+
+// yyyy-mm-dd en hora local (Santiago)
+function todayLocalYMD() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// detecta si la asignación pertenece al usuario autenticado
+function isMine(item, user) {
+  if (!user) return false;
+
+  const myId = user.id ?? null;
+  const myEmail = user.email ?? null;
+
+  // campo "tecnico" puede venir como id, string o objeto {id,email,...}
+  let tecnicoId = null;
+  let tecnicoEmail = null;
+  const t = item.tecnico;
+  if (t && typeof t === "object") {
+    if (t.id != null) tecnicoId = Number(t.id);
+    if (t.email) tecnicoEmail = String(t.email).toLowerCase();
+  } else if (typeof t === "number") {
+    tecnicoId = t;
+  } else if (typeof t === "string" && t.trim() !== "") {
+    const n = Number(t);
+    if (!Number.isNaN(n)) tecnicoId = n;
+  }
+
+  // algunos backends exponen "asignado_a" como id del usuario
+  let asignadoId = null;
+  const a = item.asignado_a;
+  if (typeof a === "number") asignadoId = a;
+  else if (typeof a === "string" && a.trim() !== "") {
+    const n = Number(a);
+    if (!Number.isNaN(n)) asignadoId = n;
+  }
+
+  const emailMatch =
+    myEmail &&
+    (tecnicoEmail && tecnicoEmail === String(myEmail).toLowerCase());
+
+  const idMatch =
+    (myId != null && (tecnicoId === myId || asignadoId === myId));
+
+  return Boolean(emailMatch || idMatch);
+}
 
 export default function Tecnico() {
-  const [visitas, setVisitas] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
+  const { user } = useAuth();
 
-  const [q, setQ] = useState(() => localStorage.getItem(LS_Q) ?? "");
-  const [fEstado, setFEstado] = useState(() => localStorage.getItem(LS_F_ESTADO) ?? "todos");
-  const [lastVisitId, setLastVisitId] = useState(() => localStorage.getItem(LS_LAST_VISIT) ?? "");
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const [q, setQ] = useState("");
+  const [filtro, setFiltro] = useState({
+    estado: "", // todas por defecto
+    tecnologia: "",
+    marca: "",
+    zona: "",
+  });
+
+  const fetchId = useRef(0);
 
   const load = async () => {
     setLoading(true);
-    setErr("");
+    setError("");
+    const myFetch = ++fetchId.current;
     try {
-      const data = await fetchVisitasDeHoy(); // ← ahora usa /api/visitas/
-      setVisitas(data);
-    } catch (e) {
-      console.error(e);
-      setErr("No se pudieron cargar tus visitas. Reintenta.");
+      const res = await api.get("/api/asignaciones/");
+      if (myFetch !== fetchId.current) return;
+      setItems(normalizeList(res.data));
+    } catch (err) {
+      console.error(err);
+      setError("No se pudo cargar la lista de visitas.");
+      setItems([]);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { load(); }, []);
-  useEffect(() => { localStorage.setItem(LS_Q, q); }, [q]);
-  useEffect(() => { localStorage.setItem(LS_F_ESTADO, fEstado); }, [fEstado]);
-
-  const filtradas = useMemo(() => {
-    let out = visitas;
-    if (fEstado !== "todos") out = out.filter((v) => v.estado === fEstado);
-    if (q.trim()) {
-      const x = q.trim().toLowerCase();
-      out = out.filter(
-        (v) =>
-          (v.cliente_nombre || "").toLowerCase().includes(x) ||
-          (v.cliente_direccion || "").toLowerCase().includes(x)
-      );
-    }
-    return [...out].sort((a, b) =>
-      String(a.hora_programada || "").localeCompare(String(b.hora_programada || ""))
-    );
-  }, [visitas, q, fEstado]);
-
   useEffect(() => {
-    if (!lastVisitId) return;
-    const t = setTimeout(() => {
-      const el = document.querySelector(`[data-row-id="${lastVisitId}"]`);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-    }, 80);
-    return () => clearTimeout(t);
-  }, [lastVisitId, visitas]);
+    load();
+  }, []);
 
-  const EstadoBadge = ({ value }) => {
-    const v = String(value || "").toLowerCase();
-    const cls =
-      v === "programada" ? styles.tagProgramada :
-      v === "en_curso"   ? styles.tagEnCurso :
-      v === "completada" ? styles.tagCompletada :
-      v === "reagendada" ? styles.tagReagendada :
-      styles.tagCancelada;
-    return <span className={`${styles.tag} ${cls}`}>{v.replace("_", " ")}</span>;
-  };
+  // Filtro base: solo las mías (asignadas a mí)
+  const misVisitas = useMemo(() => {
+    const text = q.trim().toLowerCase();
+
+    return items
+      .filter((it) => isMine(it, user))
+      .filter((it) => {
+        // filtros adicionales
+        if (filtro.estado && String(it.estado || "").toUpperCase() !== filtro.estado) return false;
+        if (filtro.tecnologia && String(it.tecnologia || "") !== filtro.tecnologia) return false;
+        if (filtro.marca && String(it.marca || "") !== filtro.marca) return false;
+        if (filtro.zona && String(it.zona || "") !== filtro.zona) return false;
+
+        if (!text) return true;
+        const bag = [
+          it.direccion,
+          it.comuna,
+          it.id_vivienda,
+          it.rut_cliente,
+          it.marca,
+          it.tecnologia,
+          it.zona,
+          it.estado,
+          it.encuesta,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return bag.includes(text);
+      })
+      .sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
+  }, [items, user, q, filtro]);
+
+  // Solo las de hoy (en Santiago)
+  const hoyYMD = todayLocalYMD();
+  const visitasDeHoy = useMemo(
+    () => misVisitas.filter((it) => String(it.fecha).slice(0, 10) === hoyYMD),
+    [misVisitas, hoyYMD]
+  );
 
   return (
     <div className={styles.wrapper}>
-      <div className={styles.headerRow}>
-        <h2 className={styles.title}>Visitas de hoy</h2>
-      </div>
+      <div className={styles.card} style={{ maxWidth: 1024 }}>
+        <header className={styles.header}>
+          <h1 className={styles.title}>Mis visitas</h1>
+          <p className={styles.subtitle}>
+            Revisa todas tus asignaciones y las de <strong>hoy</strong>.
+          </p>
+        </header>
 
-      <section className={styles.card}>
-        <div className={styles.toolbar}>
+        {/* Barra de filtros / búsqueda */}
+        <div className={styles.form} style={{ gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr", gap: 8 }}>
           <input
             className={styles.input}
-            placeholder="Buscar cliente o dirección…"
+            placeholder="Buscar por dirección, comuna, ID vivienda, RUT…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            disabled={loading}
           />
+
           <select
             className={styles.select}
-            value={fEstado}
-            onChange={(e) => setFEstado(e.target.value)}
+            value={filtro.estado}
+            onChange={(e) => setFiltro((f) => ({ ...f, estado: e.target.value }))}
+            disabled={loading}
           >
-            <option value="todos">Todos</option>
-            {ESTADOS.map((e) => (
-              <option key={e} value={e}>{e}</option>
+            <option value="">Todos los estados</option>
+            {ESTADOS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
             ))}
           </select>
-          <button className={`${styles.btn} ${styles.btnPrimary}`} onClick={load}>
-            Refrescar
-          </button>
-          <button
-            className={styles.btn}
-            onClick={() => {
-              localStorage.removeItem(LS_Q);
-              localStorage.removeItem(LS_F_ESTADO);
-              localStorage.removeItem(LS_LAST_VISIT);
-              setQ("");
-              setFEstado("todos");
-              setLastVisitId("");
-            }}
+
+          <select
+            className={styles.select}
+            value={filtro.tecnologia}
+            onChange={(e) => setFiltro((f) => ({ ...f, tecnologia: e.target.value }))}
+            disabled={loading}
           >
-            Limpiar memoria
-          </button>
+            <option value="">Tecnología</option>
+            {TECNOLOGIAS.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+
+          <select
+            className={styles.select}
+            value={filtro.marca}
+            onChange={(e) => setFiltro((f) => ({ ...f, marca: e.target.value }))}
+            disabled={loading}
+          >
+            <option value="">Marca</option>
+            {MARCAS.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+
+          <select
+            className={styles.select}
+            value={filtro.zona}
+            onChange={(e) => setFiltro((f) => ({ ...f, zona: e.target.value }))}
+            disabled={loading}
+          >
+            <option value="">Zona</option>
+            {ZONAS.map((z) => (
+              <option key={z} value={z}>
+                {z[0] + z.slice(1).toLowerCase()}
+              </option>
+            ))}
+          </select>
         </div>
 
-        {err && <div className={styles.error}>{err}</div>}
+        {error && <div className={styles.error} style={{ marginTop: 8 }}>{error}</div>}
+        {loading && <div className={styles.helper} style={{ marginTop: 8 }}>Cargando…</div>}
 
-        <div className={styles.tableWrap}>
-          {loading ? (
-            <div className={styles.empty}>Cargando…</div>
-          ) : filtradas.length === 0 ? (
-            <div className={styles.empty}>Sin visitas para hoy</div>
-          ) : (
-            <table className={styles.table}>
-              <thead className={styles.thead}>
-                <tr>
-                  <th className={styles.th}>Hora</th>
-                  <th className={styles.th}>Cliente</th>
-                  <th className={styles.th}>Dirección</th>
-                  <th className={styles.th}>Estado</th>
-                  <th className={styles.th}>Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtradas.map((row) => {
-                  const idStr = String(row.id_visita);
-                  return (
-                    <tr
-                      key={idStr}
-                      data-row-id={idStr}
-                      className={idStr === String(lastVisitId) ? styles.rowHighlight : undefined}
-                    >
-                      <td className={styles.td}>{String(row.hora_programada || "").slice(0, 5)}</td>
-                      <td className={styles.td}>{row.cliente_nombre || "-"}</td>
-                      <td className={styles.td}>{row.cliente_direccion || "-"}</td>
-                      <td className={styles.td}>
-                        <EstadoBadge value={row.estado} />
-                      </td>
-                      <td className={styles.td}>
-                        <div className={styles.actions}>
-                          <select
-                            className={styles.select}
-                            value={row.estado}
-                            onChange={async (e) => {
-                              const nuevo = e.target.value;
-                              try {
-                                await patchEstadoVisita(row.id_visita, nuevo);
-                                const idStr2 = String(row.id_visita);
-                                setLastVisitId(idStr2);
-                                localStorage.setItem(LS_LAST_VISIT, idStr2);
-                                await load();
-                              } catch (ex) {
-                                console.error(ex);
-                                alert("No se pudo actualizar el estado.");
-                              }
-                            }}
-                          >
-                            {ESTADOS.map((es) => (
-                              <option key={es} value={es}>{es}</option>
-                            ))}
-                          </select>
+        {/* Sección: Visitas de hoy */}
+        <section style={{ marginTop: 16 }}>
+          <h2 className={styles.title} style={{ fontSize: 18, marginBottom: 8 }}>
+            Visitas de hoy ({hoyYMD})
+          </h2>
 
-                          <button
-                            className={styles.btn}
-                            onClick={async () => {
-                              const hhmm = prompt(
-                                "Nueva hora (HH:mm):",
-                                String(row.hora_programada || "").slice(0, 5) || "09:00"
-                              );
-                              if (!hhmm) return;
-                              const fechaHoy = new Date().toISOString().slice(0, 10);
-                              try {
-                                await patchReagendarVisita(row.id_visita, fechaHoy, hhmm);
-                                const idStr2 = String(row.id_visita);
-                                setLastVisitId(idStr2);
-                                localStorage.setItem(LS_LAST_VISIT, idStr2);
-                                await load();
-                              } catch (ex) {
-                                console.error(ex);
-                                alert("No se pudo reagendar la visita.");
-                              }
-                            }}
-                          >
-                            Reagendar
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </section>
+          <div style={{ display: "grid", gap: 10 }}>
+            {visitasDeHoy.map((it) => (
+              <div
+                key={`hoy-${it.id}`}
+                style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, display: "grid", gap: 6 }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <strong>{it.direccion}</strong>
+                  <small className={styles.helper}>
+                    {String(it.fecha).slice(0, 10)} · {String(it.estado || "").toUpperCase()}
+                  </small>
+                </div>
+                <div className={styles.helper}>
+                  Comuna: {it.comuna} — Zona: {it.zona} — Marca: {it.marca} — Tec.: {it.tecnologia}
+                </div>
+                <div className={styles.helper}>
+                  RUT cliente: {it.rut_cliente} · ID vivienda: {it.id_vivienda} · Encuesta: {it.encuesta}
+                </div>
+              </div>
+            ))}
+
+            {!loading && visitasDeHoy.length === 0 && (
+              <div className={styles.helper}>No tienes visitas programadas para hoy.</div>
+            )}
+          </div>
+        </section>
+
+        {/* Sección: Todas mis visitas */}
+        <section style={{ marginTop: 20 }}>
+          <h2 className={styles.title} style={{ fontSize: 18, marginBottom: 8 }}>Todas mis visitas</h2>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            {misVisitas.map((it) => (
+              <div
+                key={`todas-${it.id}`}
+                style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, display: "grid", gap: 6 }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <strong>{it.direccion}</strong>
+                  <small className={styles.helper}>
+                    {String(it.fecha).slice(0, 10)} · {String(it.estado || "").toUpperCase()}
+                  </small>
+                </div>
+                <div className={styles.helper}>
+                  Comuna: {it.comuna} — Zona: {it.zona} — Marca: {it.marca} — Tec.: {it.tecnologia}
+                </div>
+                <div className={styles.helper}>
+                  RUT cliente: {it.rut_cliente} · ID vivienda: {it.id_vivienda} · Encuesta: {it.encuesta}
+                </div>
+              </div>
+            ))}
+
+            {!loading && misVisitas.length === 0 && (
+              <div className={styles.helper}>No tienes visitas asignadas.</div>
+            )}
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
