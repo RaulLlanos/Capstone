@@ -1,7 +1,8 @@
-// AppRouter.jsx
-import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
-import { useAuth } from "../context/AuthContext"; // ya existente
-import NavBar from "../components/NavBar";     // tu NavBar existente con NavBar.module.css
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useEffect } from "react";
+import { useAuth } from "../context/AuthContext";
+import NavBar from "../components/NavBar";
+
 import AuditorDashboard from "../pages/Auditor";
 import TecnicoDashboard from "../pages/Tecnico";
 import Registro from "../pages/Registro";
@@ -11,14 +12,23 @@ import TecnicoDireccionesLista from "../pages/TecnicoDireccionesLista";
 import AuditorDireccionesLista from "../pages/AuditorDireccionesLista";
 import AuditorDireccionEdit from "../pages/AuditorDireccionEdit";
 
+/** Guard 1: autenticación básica */
 function RequireAuth() {
-  const { user } = useAuth();
+  const { user, initializing } = useAuth();
+
+  // Mientras verificamos sesión (F5), no decidas aún
+  if (initializing) return null; // o un spinner si quieres
+
   if (!user) return <Navigate to="/login" replace />;
   return <Outlet />;
 }
 
+/** Guard 2: rol específico (lowercase) */
 function RequireRole({ allowed /* array de strings lowercase */ }) {
-  const { user } = useAuth();
+  const { user, initializing } = useAuth();
+
+  if (initializing) return null;
+
   if (!user) return <Navigate to="/login" replace />;
   return allowed.includes(user.role) ? <Outlet /> : <Forbidden />;
 }
@@ -33,26 +43,44 @@ function Forbidden() {
 }
 
 function RedirectByRole() {
-  const { user } = useAuth();
+  const { user, initializing } = useAuth();
+
+  if (initializing) return null;
   if (!user) return <Navigate to="/login" replace />;
+
   return user.role === "auditor"
     ? <Navigate to="/auditor" replace />
     : <Navigate to="/tecnico" replace />;
 }
 
-export default function AppRouter() {
-  const { user, logout } = useAuth();
+/** Layout con efectos de lastRoute */
+function AppShell() {
+  const { user, logout, initializing } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Guarda la última ruta (excepto /login)
+  useEffect(() => {
+    if (location.pathname !== "/login") {
+      try {
+        localStorage.setItem("lastRoute", location.pathname + location.search);
+      } catch { /* empty */ }
+    }
+  }, [location.pathname, location.search]);
+
+  // Si ya estamos logueados y (por refresh) quedamos en /login,
+  // al terminar de inicializar vuelve a la última ruta guardada.
+  useEffect(() => {
+    if (!initializing && user && location.pathname === "/login") {
+      const last = localStorage.getItem("lastRoute") || "/";
+      navigate(last, { replace: true });
+    }
+  }, [initializing, user, location.pathname, navigate]);
 
   return (
-    <BrowserRouter>
-      {/* Mostrar tu NavBar solo si hay sesión */}
-      {user && (
-        <NavBar
-          // props opcionales por si tu NavBar las usa
-          user={user}
-          onLogout={logout}
-        />
-      )}
+    <>
+      {/* Muestra NavBar solo cuando ya terminó la inicialización y hay sesión */}
+      {!initializing && user && <NavBar user={user} onLogout={logout} />}
 
       <Routes>
         {/* Público */}
@@ -65,7 +93,7 @@ export default function AppRouter() {
           {/* AUDITOR */}
           <Route element={<RequireRole allowed={["auditor"]} />}>
             <Route path="/auditor" element={<AuditorDashboard />} />
-            <Route path="/registro" element={<Registro />} /> {/* <- solo auditor */}
+            <Route path="/registro" element={<Registro />} />
             <Route path="/auditor/direcciones/nueva" element={<AuditorDireccionAdd />} />
             <Route path="/auditor/direcciones" element={<AuditorDireccionesLista />} />
             <Route path="/auditor/direcciones/:id/editar" element={<AuditorDireccionEdit />} />
@@ -81,6 +109,14 @@ export default function AppRouter() {
         {/* 404 */}
         <Route path="*" element={<div style={{ padding: 24 }}><h2>404</h2></div>} />
       </Routes>
+    </>
+  );
+}
+
+export default function AppRouter() {
+  return (
+    <BrowserRouter>
+      <AppShell />
     </BrowserRouter>
   );
 }

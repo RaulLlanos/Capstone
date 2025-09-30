@@ -3,10 +3,10 @@ import { createContext, useContext, useEffect, useState } from "react";
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null); // { name, role } o null
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState(null);
+  const [initializing, setInitializing] = useState(true);
 
-  // al cargar la app, si hay token, levantamos sesión “ligera”
+  // Al cargar la app, levantamos la sesión desde localStorage
   useEffect(() => {
     const token = localStorage.getItem("token");
     const cachedUser = localStorage.getItem("user");
@@ -15,9 +15,10 @@ export function AuthProvider({ children }) {
         setUser(JSON.parse(cachedUser));
       } catch {
         localStorage.removeItem("user");
+        localStorage.removeItem("token");
       }
     }
-    setLoading(false);
+    setInitializing(false);
   }, []);
 
   const login = ({ token, user }) => {
@@ -32,8 +33,11 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
-  const value = { user, loading, login, logout };
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={{ user, initializing, login, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
