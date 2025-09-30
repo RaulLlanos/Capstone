@@ -1,14 +1,26 @@
+from django import forms
 from django.contrib import admin
-from django.utils.html import format_html
+from django.core.exceptions import ValidationError
+from django.utils import timezone
 
 from .models import (
     DireccionAsignada, Reagendamiento, HistorialAsignacion,
     EstadoAsignacion, BloqueHorario
 )
+from .comunas import zona_para_comuna, COMUNAS_SANTIAGO
 from usuarios.models import Usuario
+
+class DireccionAsignadaAdminForm(forms.ModelForm):
+    comuna = forms.ChoiceField(choices=[(c, c) for c in COMUNAS_SANTIAGO])
+
+    class Meta:
+        model = DireccionAsignada
+        fields = "__all__"
 
 @admin.register(DireccionAsignada)
 class DireccionAsignadaAdmin(admin.ModelAdmin):
+    form = DireccionAsignadaAdminForm
+
     list_display = (
         "id", "fecha", "direccion", "comuna", "zona",
         "marca", "tecnologia", "encuesta",
@@ -36,16 +48,25 @@ class DireccionAsignadaAdmin(admin.ModelAdmin):
         }),
         ("Metadatos", {"fields": ("created_at", "updated_at")}),
     )
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = ("created_at", "updated_at", "zona")  # zona calculada
 
-    # Solo técnicos en el combo de asignado_a
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "asignado_a":
             kwargs["queryset"] = Usuario.objects.filter(rol="tecnico").order_by("first_name", "last_name")
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
-    # Historial automático: creada / asignada a técnico
     def save_model(self, request, obj, form, change):
+        # Fecha futura
+        if obj.fecha and obj.fecha < timezone.localdate():
+            raise ValidationError({"fecha": "La fecha no puede ser en el pasado."})
+
+        # Calcular zona por comuna
+        if obj.comuna:
+            try:
+                obj.zona = zona_para_comuna(obj.comuna)
+            except Exception:
+                raise ValidationError({"comuna": "Comuna no válida para Santiago."})
+
         creating = obj.pk is None
         prev_asignado = None
         if not creating:
@@ -68,6 +89,13 @@ class DireccionAsignadaAdmin(admin.ModelAdmin):
                     detalles=f"Asignada a {obj.asignado_a.email}",
                     usuario=getattr(request, "user", None),
                 )
+            else:
+                HistorialAsignacion.objects.create(
+                    asignacion=obj,
+                    accion=HistorialAsignacion.Accion.DESASIGNADA,
+                    detalles="Desasignada desde admin.",
+                    usuario=getattr(request, "user", None),
+                )
 
 @admin.register(Reagendamiento)
 class ReagendamientoAdmin(admin.ModelAdmin):
@@ -83,25 +111,24 @@ class ReagendamientoAdmin(admin.ModelAdmin):
     )
     readonly_fields = ("created_at",)
 
-    # Solo técnicos en usuario (y lo auto-seteamos en save_model si falta)
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "usuario":
             kwargs["queryset"] = Usuario.objects.filter(rol="tecnico").order_by("first_name", "last_name")
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def save_model(self, request, obj, form, change):
-        # Autocompleta fecha/bloque anteriores si no los llenaste
+        if obj.fecha_nueva and obj.fecha_nueva < timezone.localdate():
+            raise ValidationError({"fecha_nueva": "La fecha no puede ser en el pasado."})
+
         if obj.asignacion and (not obj.fecha_anterior or not obj.bloque_anterior):
             obj.fecha_anterior  = obj.fecha_anterior  or (obj.asignacion.reagendado_fecha or obj.asignacion.fecha)
             obj.bloque_anterior = obj.bloque_anterior or obj.asignacion.reagendado_bloque
 
-        # Setea el usuario (si lo dejaste vacío)
         if not obj.usuario_id:
             obj.usuario = request.user if getattr(request.user, "rol", None) == "tecnico" else obj.usuario
 
         super().save_model(request, obj, form, change)
 
-        # Actualiza la dirección y deja historial
         asignacion = obj.asignacion
         asignacion.reagendado_fecha  = obj.fecha_nueva
         asignacion.reagendado_bloque = obj.bloque_nuevo
@@ -122,11 +149,7 @@ class HistorialAsignacionAdmin(admin.ModelAdmin):
     search_fields = ("detalles", "asignacion__direccion", "usuario__email")
     readonly_fields = ("asignacion", "accion", "detalles", "usuario", "created_at")
 
-    # Solo lectura en admin (se genera automático)
     def has_add_permission(self, request):
         return False
     def has_change_permission(self, request, obj=None):
         return False
-    def has_delete_permission(self, request, obj=None):
-        # Solo superusuario puede borrar entradas del historial
-        return bool(getattr(request.user, "is_superuser", False))
