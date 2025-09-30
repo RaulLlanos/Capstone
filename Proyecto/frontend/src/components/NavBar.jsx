@@ -1,75 +1,80 @@
 // src/components/NavBar.jsx
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useState, useMemo } from "react";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import styles from "./NavBar.module.css";
 
 export default function NavBar() {
-  const { user, logout } = useAuth();
+  // 🔒 TODOS los hooks al inicio SIEMPRE
+  const { user, logout } = useAuth() || {};
   const location = useLocation();
   const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
 
-  // Ocultar en /login
-  if (location.pathname === "/login") return null;
+  // flag para ocultar en /login (no hagas return antes de los hooks)
+  const hide = location?.pathname === "/login";
 
   const handleLogout = () => {
-    localStorage.removeItem("lastRoute");
-    logout();
+    try { localStorage.removeItem("lastRoute"); } catch { /* empty */ }
+    if (typeof logout === "function") logout();
     navigate("/login", { replace: true });
   };
 
-  // Inicial del usuario (si no viene name, usa email)
-  const displayName = user?.name || user?.email || "Usuario";
+  const displayName = (user?.name || user?.email || "Usuario").trim();
   const initial = (displayName[0] || "?").toUpperCase();
+  const role = String(user?.role || user?.rol || "").toLowerCase();
+  const isAuditor = role === "auditor";
+  const isTecnico = role === "tecnico";
+  const roleLabel = isAuditor ? "Auditor" : isTecnico ? "Técnico" : "Usuario";
 
-  // Roles (tu backend usa lowercase)
-  const isAuditor = user?.role === "auditor";
-  const isTecnico = user?.role === "tecnico";
-  const roleLabel = isAuditor ? "Auditor" : "Técnico";
+  const links = useMemo(() => {
+    if (!user) return [];
+    if (isAuditor) {
+      return [
+        { to: "/auditor/direcciones", label: "Direcciones" },
+        { to: "/auditor/direcciones/nueva", label: "Añadir dirección" },
+        { to: "/registro", label: "Crear usuario" },
+      ];
+    }
+    if (isTecnico) return [{ to: "/tecnico/direcciones", label: "Direcciones" }];
+    return [];
+  }, [user, isAuditor, isTecnico]);
+
+  // Si hay que ocultar, renderiza nada (pero los hooks ya se llamaron todos)
+  if (hide) return null;
 
   return (
-    <header className={styles.header}>
-      <div className={styles.left}>
-        <Link to="/" className={styles.brand}>
-          <img src="assets/logo.png" alt="logo" /> 
-          <span className={styles.logoDot} />
+    <header className={styles.wrapper}>
+      <div className={styles.inner}>
+        {/* Brand con SVG inline (evita rutas rotas) */}
+        <Link to="/" className={styles.brand} aria-label="Inicio">
           <span className={styles.brandText}>Gestión Técnicos</span>
         </Link>
-      </div>
 
-      <div className={styles.right}>
+        {/* Desktop nav */}
+        <nav className={styles.navDesktop} aria-label="Principal">
+          {links.map((l) => (
+            <NavLink
+              key={l.to}
+              to={l.to}
+              className={({ isActive }) =>
+                [styles.navLink, isActive ? styles.navLinkActive : ""].join(" ")
+              }
+              end
+            >
+              {l.label}
+            </NavLink>
+          ))}
+        </nav>
+
+        {/* Right */}
         {user && (
-          <>
-            {/* Acciones según rol */}
-            {isAuditor && (
-              <>
-                <Link to="/registro" className={styles.logoutBtn}>
-                  + Crear usuario
-                </Link>
-                <Link to="/auditor/direcciones/nueva" className={styles.logoutBtn}>
-                  + Añadir dirección
-                </Link>
-                <Link to="/auditor/direcciones" className={styles.logoutBtn}>
-                  Ver direcciones
-                </Link>
-              </>
-            )}
-
-            {isTecnico && (
-              <Link to="/tecnico/direcciones" className={styles.logoutBtn}>
-                Direcciones
-              </Link>
-            )}
-
-            {/* Badge de usuario */}
+          <div className={styles.right}>
             <div className={styles.userBadge} title={displayName}>
               <div className={styles.avatar}>{initial}</div>
               <div className={styles.userInfo}>
                 <div className={styles.userName}>{displayName}</div>
-                <div
-                  className={`${styles.role} ${
-                    isAuditor ? styles.roleAuditor : styles.roleTecnico
-                  }`}
-                >
+                <div className={`${styles.role} ${isAuditor ? styles.roleAuditor : styles.roleTecnico}`}>
                   {roleLabel}
                 </div>
               </div>
@@ -78,9 +83,46 @@ export default function NavBar() {
             <button className={styles.logoutBtn} onClick={handleLogout}>
               Cerrar sesión
             </button>
-          </>
+
+            {/* Burger (mobile) */}
+            <button
+              className={styles.burger}
+              aria-label="Abrir menú"
+              aria-expanded={open}
+              onClick={() => setOpen((o) => !o)}
+            >
+              <span />
+              <span />
+              <span />
+            </button>
+          </div>
         )}
       </div>
+
+      {/* Mobile menu */}
+      {user && (
+        <div className={[styles.navMobile, open ? styles.navMobileOpen : ""].join(" ")}>
+          {links.map((l) => (
+            <NavLink
+              key={l.to}
+              to={l.to}
+              className={({ isActive }) =>
+                [styles.mobileLink, isActive ? styles.mobileLinkActive : ""].join(" ")
+              }
+              onClick={() => setOpen(false)}
+              end
+            >
+              {l.label}
+            </NavLink>
+          ))}
+          <button
+            className={styles.mobileLogout}
+            onClick={() => { setOpen(false); handleLogout(); }}
+          >
+            Cerrar sesión
+          </button>
+        </div>
+      )}
     </header>
   );
 }
