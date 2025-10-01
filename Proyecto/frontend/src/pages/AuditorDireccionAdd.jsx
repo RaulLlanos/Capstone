@@ -42,9 +42,9 @@ const COMUNAS_POR_ZONA = {
 };
 
 const ENCUESTAS = [
-  { value: "post_visita", label: "post visita"   },
-  { value: "instalacion", label: "instalación"   },
-  { value: "operaciones", label: "operaciones"   },
+  { value: "post_visita", label: "Post visita"   },
+  { value: "instalacion", label: "Instalación"   },
+  { value: "operaciones", label: "Operaciones"   },
 ];
 
 // Intentaremos ambos endpoints según cómo esté registrado el router:
@@ -239,7 +239,7 @@ export default function AuditorDireccionAdd() {
                 onChange={onChange}
                 disabled={loading}
               >
-                <option value="">— seleccionar —</option>
+                <option value="">— Seleccionar —</option>
                 {ZONAS.map((z) => (
                   <option key={z.value} value={z.value}>{z.label}</option>
                 ))}
@@ -256,7 +256,7 @@ export default function AuditorDireccionAdd() {
                 onChange={onChange}
                 disabled={loading || !form.zona}
               >
-                <option value="">{form.zona ? "— seleccionar —" : "Selecciona zona primero"}</option>
+                <option value="">{form.zona ? "— Seleccionar —" : "Selecciona zona primero"}</option>
                 {comunasOptions.map((c) => (
                   <option key={c} value={c}>{c}</option>
                 ))}
@@ -273,7 +273,7 @@ export default function AuditorDireccionAdd() {
                 onChange={onChange}
                 disabled={loading}
               >
-                <option value="">— seleccionar —</option>
+                <option value="">— Seleccionar —</option>
                 {MARCAS.map((m) => (
                   <option key={m.value} value={m.value}>{m.label}</option>
                 ))}
@@ -292,7 +292,7 @@ export default function AuditorDireccionAdd() {
                 onChange={onChange}
                 disabled={loading}
               >
-                <option value="">— seleccionar —</option>
+                <option value="">— Seleccionar —</option>
                 {TECNOLOGIAS.map((t) => (
                   <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
@@ -336,7 +336,7 @@ export default function AuditorDireccionAdd() {
                 onChange={onChange}
                 disabled={loading}
               >
-                <option value="">— seleccionar —</option>
+                <option value="">— Seleccionar —</option>
                 {ENCUESTAS.map((e) => (
                   <option key={e.value} value={e.value}>{e.label}</option>
                 ))}

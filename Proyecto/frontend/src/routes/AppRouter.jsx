@@ -11,6 +11,7 @@ import AuditorDireccionAdd from "../pages/AuditorDireccionAdd";
 import TecnicoDireccionesLista from "../pages/TecnicoDireccionesLista";
 import AuditorDireccionesLista from "../pages/AuditorDireccionesLista";
 import AuditorDireccionEdit from "../pages/AuditorDireccionEdit";
+import TecnicoReagendar from "../pages/TecnicoReagendar"
 
 /** Guard 1: autenticación básica */
 function RequireAuth() {
@@ -103,6 +104,7 @@ function AppShell() {
           <Route element={<RequireRole allowed={["tecnico"]} />}>
             <Route path="/tecnico" element={<TecnicoDashboard />} />
             <Route path="/tecnico/direcciones" element={<TecnicoDireccionesLista />} />
+            <Route path="/tecnico/reagendar/:id" element={<TecnicoReagendar />} />
           </Route>
         </Route>
 
