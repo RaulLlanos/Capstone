@@ -6,9 +6,9 @@ from datetime import timedelta
 from dotenv import load_dotenv
 import dj_database_url
 
-# === Paths / .env ===
+# === Paths ===
 BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / ".env")  # lee variables de entorno desde backend/.env
+load_dotenv(BASE_DIR / ".env")
 
 # === Básico ===
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-insecure-key")  # cambia en prod
@@ -34,8 +34,6 @@ INSTALLED_APPS = [
     "django_filters",
     "corsheaders",
     "drf_spectacular",
-    # Blacklist/rotación para refresh tokens (seguridad sesiones largas)
-    "rest_framework_simplejwt.token_blacklist",
 
     # Apps del proyecto
     "core",
@@ -61,19 +59,19 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-# === CORS/CSRF (ajusta orígenes del front) ===
+# === CORS/CSRF (ajusta según tu front) ===
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
-CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS[:]  # simple
+CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS[:]
 CORS_ALLOW_CREDENTIALS = True
 
 # Cookies de CSRF (dev)
 CSRF_COOKIE_SAMESITE = "Lax"
-CSRF_COOKIE_SECURE = False  # en PROD se fuerza True más abajo
+CSRF_COOKIE_SECURE = False  # en PROD lo forzamos True más abajo
 
 # === URLS / WSGI ===
 ROOT_URLCONF = "claro_project.urls"
@@ -96,17 +94,14 @@ TEMPLATES = [
     },
 ]
 
-# === Base de datos (Supabase/Postgres) ===
+# === Base de datos ===
 DATABASES = {
     "default": dj_database_url.config(
         env="DATABASE_URL",
         conn_max_age=600,
-        ssl_require=True,  # necesario en Supabase
+        ssl_require=True,   # necesario en Supabase
     )
 }
-# Si en el futuro usas un schema:
-# DATABASES["default"].setdefault("OPTIONS", {})
-# DATABASES["default"]["OPTIONS"]["options"] = "-c search_path=db_claro,public"
 
 # === Password validators ===
 AUTH_PASSWORD_VALIDATORS = [
@@ -129,33 +124,32 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# === JWT (SimpleJWT) + cookies ===
+# === JWT (SimpleJWT) — configuración simple sin rotación/blacklist ===
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
     "AUTH_HEADER_TYPES": ("Bearer",),
-
-    # Seguridad extra para sesiones largas:
-    "ROTATE_REFRESH_TOKENS": True,
-    "BLACKLIST_AFTER_ROTATION": True,
+    # sin ROTATE_REFRESH_TOKENS / sin BLACKLIST_AFTER_ROTATION
 }
 
-# Cookies JWT (las gestiona usuarios/auth_views.py)
+# === Cookies para JWT HttpOnly ===
 JWT_AUTH_COOKIE = "access"
 JWT_AUTH_REFRESH_COOKIE = "refresh"
-JWT_COOKIE_SAMESITE = "Lax"   # en producción puedes evaluar "Strict"
-JWT_COOKIE_SECURE = False     # en PROD se fuerza True abajo
+JWT_COOKIE_SAMESITE = "Lax"    # en prod: "None" si hay front en otro dominio y HTTPS
+JWT_COOKIE_SECURE = False      # en prod: True
 JWT_COOKIE_PATH = "/"
 JWT_COOKIE_DOMAIN = None
 
 # === DRF ===
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "usuarios.auth_cookie.CookieJWTAuthentication",                # JWT en cookie
-        "rest_framework_simplejwt.authentication.JWTAuthentication",   # Authorization: Bearer
-        "rest_framework.authentication.SessionAuthentication",         # admin & Browsable API
+        "usuarios.auth_cookie.CookieJWTAuthentication",                        # cookie JWT
+        "rest_framework_simplejwt.authentication.JWTAuthentication",           # Authorization: Bearer
+        "rest_framework.authentication.SessionAuthentication",                 # admin y Browsable API
     ),
-    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
+    "DEFAULT_PERMISSION_CLASSES": (
+        "rest_framework.permissions.IsAuthenticated",
+    ),
     "DEFAULT_FILTER_BACKENDS": (
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.SearchFilter",
@@ -176,8 +170,6 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "ClaroVTR API",
     "DESCRIPTION": "API para asignaciones y auditorías",
     "VERSION": "1.0.0",
-    # Si quieres que Swagger recuerde auth, descomenta:
-    # "SWAGGER_UI_SETTINGS": {"persistAuthorization": True},
 }
 
 # === Hash de contraseñas (bcrypt primero) ===
@@ -187,7 +179,7 @@ PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.PBKDF2PasswordHasher",
 ]
 
-# === Backends de autenticación (email o local-part) ===
+# === Backends de autenticación (email o “local-part”) ===
 AUTHENTICATION_BACKENDS = [
     "usuarios.backends.EmailOrLocalBackend",
     "django.contrib.auth.backends.ModelBackend",
@@ -197,26 +189,22 @@ AUTHENTICATION_BACKENDS = [
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 
-# === Redirecciones post login/logout (para /api-auth/login/) ===
 LOGIN_REDIRECT_URL = "/api/"
 LOGOUT_REDIRECT_URL = "/api-auth/login/"
 LOGIN_URL = "/api-auth/login/"
 
-# === Seguridad fuerte en PRODUCCIÓN (no “ensucia” dev) ===
+# === Endurecer en PRODUCCIÓN, sin “ensuciar” dev ===
 if IS_PROD:
-    SECURE_SSL_REDIRECT = True             # obliga HTTPS
+    SECURE_SSL_REDIRECT = True
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     JWT_COOKIE_SECURE = True
-    SECURE_HSTS_SECONDS = 31536000         # 1 año
+    SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = "DENY"
-    # Si vas detrás de proxy/ingress:
-    # SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 else:
-    # DEV local cómodo
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
     JWT_COOKIE_SECURE = False

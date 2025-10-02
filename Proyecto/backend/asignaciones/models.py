@@ -1,3 +1,4 @@
+# asignaciones/models.py
 from django.db import models
 from django.db.models import Q
 from usuarios.models import Usuario
@@ -55,6 +56,7 @@ class DireccionAsignada(models.Model):
         "Estado", max_length=10, choices=EstadoAsignacion.choices, default=EstadoAsignacion.PENDIENTE
     )
 
+    # reagendamiento efectivo (último)
     reagendado_fecha  = models.DateField("Reagendado fecha", null=True, blank=True,
                                          help_text="Solo se completa cuando el cliente reagenda.")
     reagendado_bloque = models.CharField("Reagendado bloque", max_length=5,
@@ -112,7 +114,6 @@ class HistorialAsignacion(models.Model):
     class Accion(models.TextChoices):
         CREADA            = "CREADA", "Creada"
         ASIGNADA_TECNICO  = "ASIGNADA_TECNICO", "Asignada a técnico"
-        DESASIGNADA       = "DESASIGNADA", "Desasignada"
         ESTADO_CLIENTE    = "ESTADO_CLIENTE",   "Estado del cliente"
         REAGENDADA        = "REAGENDADA",       "Reagendada"
         CERRADA           = "CERRADA",          "Cerrada"
@@ -135,4 +136,5 @@ class HistorialAsignacion(models.Model):
     def __str__(self):
         return f"H{self.id} {self.accion} @A{self.asignacion_id}"
 
+# Alias para otras apps
 Asignacion = DireccionAsignada
