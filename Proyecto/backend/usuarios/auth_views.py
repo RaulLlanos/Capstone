@@ -78,6 +78,7 @@ class LoginView(APIView):
             'last_name': user.last_name,
             'rol': getattr(user, 'rol', None),
         })
+
         _set_cookie(resp, getattr(settings, 'JWT_AUTH_COOKIE', 'access'),  str(access),  access_s)
         _set_cookie(resp, getattr(settings, 'JWT_AUTH_REFRESH_COOKIE', 'refresh'), str(refresh), refresh_s)
         return resp
@@ -94,51 +95,15 @@ class RefreshCookieView(APIView):
             access = refresh.access_token
         except TokenError:
             return Response({'detail': 'Refresh inválido/expirado.'}, status=401)
-
-        # === ROTACIÓN (opcional, activada en settings) ===
-        new_refresh_str = None
-        try:
-            if settings.SIMPLE_JWT.get("ROTATE_REFRESH_TOKENS"):
-                # Blacklistea el viejo si corresponde
-                if settings.SIMPLE_JWT.get("BLACKLIST_AFTER_ROTATION"):
-                    try:
-                        refresh.blacklist()
-                    except Exception:
-                        pass
-                # Emite un refresh nuevo para el mismo usuario
-                user_id = refresh.get("user_id")
-                if not user_id:
-                    return Response({'detail': 'Refresh inválido.'}, status=401)
-                try:
-                    user = Usuario.objects.get(pk=user_id)
-                except Usuario.DoesNotExist:
-                    return Response({'detail': 'Usuario no encontrado.'}, status=401)
-                new_refresh = RefreshToken.for_user(user)
-                new_refresh_str = str(new_refresh)
-        except Exception:
-            # Si algo falla en rotación, al menos devolvemos un access válido
-            new_refresh_str = None
-
-        access_s  = int(settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds())
-        refresh_s = int(settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'].total_seconds())
-
+        access_s = int(settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds())
         resp = Response({'detail': 'Access renovado.'})
         _set_cookie(resp, getattr(settings, 'JWT_AUTH_COOKIE', 'access'), str(access), access_s)
-        if new_refresh_str:
-            _set_cookie(resp, getattr(settings, 'JWT_AUTH_REFRESH_COOKIE', 'refresh'), new_refresh_str, refresh_s)
         return resp
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
     def post(self, request):
         resp = Response(status=204)
-        # === NUEVO: intentar blacklistear el refresh actual ===
-        raw_refresh = request.COOKIES.get(getattr(settings, 'JWT_AUTH_REFRESH_COOKIE', 'refresh'))
-        if raw_refresh:
-            try:
-                RefreshToken(raw_refresh).blacklist()
-            except TokenError:
-                pass
         _delete_cookie(resp, getattr(settings, 'JWT_AUTH_COOKIE', 'access'))
         _delete_cookie(resp, getattr(settings, 'JWT_AUTH_REFRESH_COOKIE', 'refresh'))
         return resp
