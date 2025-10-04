@@ -26,6 +26,8 @@ function todayLocalYMD() {
   return `${y}-${m}-${day}`;
 }
 
+const isCompletada = (it) => String(it.estado || "").toUpperCase() === "COMPLETADA";
+
 // --- NUEVO: helpers de “fecha/bloque efectivos” ---
 function getEffectiveDate(it) {
   const r =
@@ -361,6 +363,18 @@ export default function Tecnico() {
 
                 <div className={styles.actions}>
                   {isReagendado(it) && <span className={`${styles.badge} ${styles.badgeReagendado}`}>Reagendado</span>}
+                  <button
+                    className={styles.button}
+                    onClick={() =>
+                      navigate(
+                        isCompletada(it)
+                          ? `/tecnico/auditoria/ver/${it.id}`     // vista solo lectura (por asignación)
+                          : `/tecnico/auditoria/nueva/${it.id}`   // crear auditoría
+                      )
+                    }
+                  >
+                    {isCompletada(it) ? "Ver auditoría" : "Auditar"}
+                  </button>
                   <button className={styles.button} onClick={() => goReagendar(it.id)}>
                     Reagendar
                   </button>
@@ -395,6 +409,9 @@ export default function Tecnico() {
 
                 <div className={styles.actions}>
                   {isReagendado(it) && <span className={`${styles.badge} ${styles.badgeReagendado}`}>Reagendado</span>}
+                  <button className={styles.button} onClick={() => navigate(`/tecnico/auditoria/nueva/${it.id}`)}>
+                    Auditar
+                  </button>
                   <button className={styles.button} onClick={() => goReagendar(it.id)}>
                     Reagendar
                   </button>
