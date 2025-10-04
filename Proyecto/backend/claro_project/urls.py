@@ -7,9 +7,6 @@ from rest_framework import routers
 from django.conf import settings
 from django.conf.urls.static import static
 
-from asignaciones.views import AsignacionViewSet
-
-
 from core.views import gracias
 
 from usuarios import views as usuarios_views
@@ -19,15 +16,15 @@ from usuarios.auth_views import (
 
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 
-
-from asignaciones.views import AsignacionViewSet
+# ✅ Import correcto (solo este)
+from asignaciones.views import DireccionAsignadaViewSet
 from auditoria.views import AuditoriaVisitaViewSet, IssueViewSet
 
 router = routers.DefaultRouter()
 router.register(r'usuarios', usuarios_views.UsuarioViewSet, basename='usuarios')
 
 # Asignaciones / Auditorías
-router.register(r'asignaciones', AsignacionViewSet, basename='asignaciones')
+router.register(r'asignaciones', DireccionAsignadaViewSet, basename='asignaciones')
 router.register(r'auditorias',   AuditoriaVisitaViewSet, basename='auditorias')
 router.register(r'issues',       IssueViewSet,           basename='issues')
 
@@ -53,6 +50,8 @@ urlpatterns = [
     path('auth/csrf',     CsrfTokenView.as_view(), name='auth-csrf'),
 
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')),
+
+    # Docs
     path('schema/', SpectacularAPIView.as_view(), name='schema'),
     path('docs/',   SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
     path('redoc/',  SpectacularRedocView.as_view(url_name='schema'),   name='redoc'),

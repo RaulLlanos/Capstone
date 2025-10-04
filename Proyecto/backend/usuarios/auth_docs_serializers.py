@@ -5,14 +5,14 @@ class RegisterDocSerializer(serializers.Serializer):
     password = serializers.CharField()
     first_name = serializers.CharField()
     last_name = serializers.CharField()
-    rut_num = serializers.IntegerField(required=False)  # opcional
+    rut_num = serializers.IntegerField(required=False)
     dv = serializers.CharField(required=False, max_length=1)
-    rol = serializers.ChoiceField(choices=["tecnico", "auditor"])
+    rol = serializers.ChoiceField(choices=["tecnico", "administrador"])
 
 class LoginDocSerializer(serializers.Serializer):
     email = serializers.EmailField(required=False)
-    username = serializers.CharField(required=False)  # local-part antes del @
-    login = serializers.CharField(required=False)     # email o local-part
+    username = serializers.CharField(required=False)
+    login = serializers.CharField(required=False)
     password = serializers.CharField()
 
 class MeDocSerializer(serializers.Serializer):

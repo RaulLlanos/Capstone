@@ -11,7 +11,7 @@ from .serializers import UsuarioSerializer
 
 class UsuarioViewSet(viewsets.ModelViewSet):
     """
-    - Auditor: CRUD total de usuarios.
+    - Administrador: CRUD total de usuarios.
     - Técnico: SOLO lectura de su propio usuario.
     """
     queryset = Usuario.objects.all().order_by("-date_joined")
@@ -24,7 +24,7 @@ class UsuarioViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         u = self.request.user
-        if getattr(u, "rol", None) == "auditor":
+        if getattr(u, "rol", None) == "administrador":
             return super().get_queryset()
         return Usuario.objects.filter(id=u.id)
 
