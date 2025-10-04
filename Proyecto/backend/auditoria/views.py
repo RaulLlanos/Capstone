@@ -7,23 +7,21 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from .models import AuditoriaVisita, Issue
 from .serializers import AuditoriaVisitaSerializer, IssueSerializer
 
-
 class MixedRolePolicy(BasePermission):
     """
-    Admin/Auditor: CRUD completo.
-    Técnico: solo GET/HEAD/OPTIONS y POST (crear auditoría o subir fotos de su propia asignación).
+    Admin/Administrador: CRUD completo.
+    Técnico: solo GET/HEAD/OPTIONS y POST (según tu regla).
     """
     def has_permission(self, request, view):
         u = getattr(request, "user", None)
         if not (u and u.is_authenticated):
             return False
         rol = getattr(u, "rol", None)
-        if rol in ("admin", "auditor"):
+        if rol == "administrador":
             return True
         if rol == "tecnico":
             return request.method in (*SAFE_METHODS, "POST")
         return False
-
 
 class AuditoriaVisitaViewSet(viewsets.ModelViewSet):
     queryset = AuditoriaVisita.objects.all().select_related("asignacion").order_by("-created_at")
@@ -34,7 +32,6 @@ class AuditoriaVisitaViewSet(viewsets.ModelViewSet):
     search_fields = ["direccion_cliente", "rut_cliente", "id_vivienda", "nombre_auditor"]
 
     def perform_create(self, serializer):
-        # El serializer.validate() asegura que, si es técnico, la asignación es suya.
         serializer.save()
 
     @action(detail=True, methods=["post"], url_path="upload_fotos")
@@ -66,10 +63,9 @@ class AuditoriaVisitaViewSet(viewsets.ModelViewSet):
 
         return Response(AuditoriaVisitaSerializer(obj, context={"request": request}).data, status=200)
 
-
 class IssueViewSet(viewsets.ModelViewSet):
     """
-    Admin/Auditor: CRUD completo.
+    Administrador: CRUD completo.
     Técnico: lectura y creación de issues ligados a auditorías de SU asignación.
     """
     queryset = Issue.objects.all().order_by("id")

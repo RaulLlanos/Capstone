@@ -27,7 +27,7 @@ CREATE TABLE usuarios (
   apellido_usuario TEXT NOT NULL,
   email_usuario    TEXT UNIQUE NOT NULL,
   contrasena_hash  TEXT NOT NULL,
-  rol TEXT NOT NULL CHECK (rol IN ('tecnico','auditor')),        -- solo 2 roles
+  rol TEXT NOT NULL CHECK (rol IN ('tecnico','administrador')),        -- solo 2 roles
   fecha_creacion TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY (rut)
 );

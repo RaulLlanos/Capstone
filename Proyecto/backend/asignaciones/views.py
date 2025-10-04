@@ -1,6 +1,5 @@
 from django.db.models import Q
 from django.utils.dateparse import parse_date
-from django.utils import timezone
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -17,9 +16,8 @@ from drf_spectacular.utils import (
 )
 
 from core.permissions import AdminAuditorFull_TechReadOnlyPlusActions
-from .models import DireccionAsignada, EstadoAsignacion, HistorialAsignacion
+from .models import DireccionAsignada, EstadoAsignacion
 from .serializers import DireccionAsignadaSerializer, DireccionAsignadaListaSerializer
-from .comunas import zona_para_comuna, COMUNAS_SANTIAGO
 from usuarios.models import Usuario
 
 @extend_schema_view(
@@ -45,11 +43,11 @@ from usuarios.models import Usuario
         responses=DireccionAsignadaListaSerializer,
     ),
     retrieve=extend_schema(summary="Detalle de dirección", responses=DireccionAsignadaSerializer),
-    create=extend_schema(summary="Crear dirección (solo auditor/admin)", responses=DireccionAsignadaSerializer),
+    create=extend_schema(summary="Crear dirección (solo administrador)", responses=DireccionAsignadaSerializer),
 )
 class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     """
-    - Auditor/Admin: CRUD total + carga CSV
+    - Administrador: CRUD total + carga CSV
     - Técnico: lectura + acciones: asignarme, prefill, estado_cliente, reagendar, cerrar
     """
     queryset = DireccionAsignada.objects.all().order_by("-created_at")
@@ -71,23 +69,23 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         return DireccionAsignadaSerializer
 
     # ---------------------------
-    # Carga masiva CSV (auditor)
+    # Acciones de administración
     # ---------------------------
     @extend_schema(
-        summary="Carga masiva (CSV) (auditor/admin)",
+        summary="Carga masiva (CSV) (administrador)",
         description=(
-            "Sube un CSV UTF-8 con encabezados: "
-            "`fecha, tecnologia, marca, rut_cliente, id_vivienda, direccion, comuna, encuesta, id_qualtrics`. "
-            "La `zona` se calcula automáticamente según la comuna."
+            "Sube un CSV UTF-8 con los encabezados: "
+            "`fecha, tecnologia, marca, rut_cliente, id_vivienda, direccion, encuesta, id_qualtrics` "
+            "y opcionalmente `comuna, zona`."
         ),
         examples=[
             OpenApiExample(
                 "CSV esperado",
                 description="Contenido ejemplo (2 filas)",
                 value=(
-                    "fecha,tecnologia,marca,rut_cliente,id_vivienda,direccion,comuna,encuesta,id_qualtrics\n"
-                    "2025-10-05,FTTH,CLARO,12.345.678-9,HOME-001,\"Av. Siempre Viva 123\",Ñuñoa,instalacion,QX-001\n"
-                    "2025-10-06,HFC,VTR,9.876.543-2,HOME-002,\"Los Olmos 456\",Maipú,post_visita,QX-002\n"
+                    "fecha,tecnologia,marca,rut_cliente,id_vivienda,direccion,comuna,zona,encuesta,id_qualtrics\n"
+                    "2025-09-05,FTTH,CLARO,12.345.678-9,HOME-001,\"Av. Siempre Viva 123, Ñuñoa\",Ñuñoa,CENTRO,instalacion,QX-001\n"
+                    "2025-09-06,HFC,VTR,9.876.543-2,HOME-002,\"Los Olmos 456, Maipú\",Maipú,SUR,post_visita,QX-002\n"
                 ),
             )
         ],
@@ -96,7 +94,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"])
     def upload_csv(self, request):
         u = request.user
-        if getattr(u, "rol", None) not in ("admin", "auditor") and not getattr(u, "is_superuser", False):
+        if getattr(u, "rol", None) != "administrador":
             return Response({"detail": "No autorizado."}, status=403)
 
         file = request.FILES.get("file")
@@ -109,30 +107,21 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             return Response({"detail": "El CSV debe estar en UTF-8."}, status=400)
 
         reader = csv.DictReader(io.StringIO(decoded))
-        required = {"fecha", "tecnologia", "marca", "rut_cliente", "id_vivienda", "direccion", "comuna", "encuesta"}
+        required = {"fecha", "tecnologia", "marca", "rut_cliente", "id_vivienda", "direccion", "encuesta"}
         headers = set([h.strip() for h in (reader.fieldnames or [])])
         if not required.issubset(headers):
             return Response({"detail": f"Encabezados requeridos: {sorted(required)}"}, status=400)
 
         created = 0
-        today = timezone.localdate()
-
         with transaction.atomic():
             for idx, row in enumerate(reader, start=2):
                 fecha_str = (row.get("fecha") or "").strip()
                 fecha_val = parse_date(fecha_str) if fecha_str else None
                 if fecha_str and not fecha_val:
-                    return Response({"detail": f'Fila {idx}: fecha inválida "{fecha_str}" (use YYYY-MM-DD).'}, status=400)
-                if fecha_val and fecha_val < today:
-                    return Response({"detail": f"Fila {idx}: la fecha no puede ser en el pasado."}, status=400)
-
-                comuna = (row.get("comuna") or "").strip()
-                if not comuna:
-                    return Response({"detail": f"Fila {idx}: falta comuna."}, status=400)
-                try:
-                    zona = zona_para_comuna(comuna)
-                except ValueError:
-                    return Response({"detail": f"Fila {idx}: comuna no válida para Santiago."}, status=400)
+                    return Response(
+                        {"detail": f'Fila {idx}: fecha inválida "{fecha_str}" (use YYYY-MM-DD).'},
+                        status=400,
+                    )
 
                 DireccionAsignada.objects.create(
                     fecha=fecha_val,
@@ -141,8 +130,8 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                     rut_cliente=(row["rut_cliente"] or "").strip(),
                     id_vivienda=(row["id_vivienda"] or "").strip(),
                     direccion=(row["direccion"] or "").strip(),
-                    comuna=comuna,
-                    zona=zona,  # calculada
+                    comuna=(row.get("comuna") or "").strip(),
+                    zona=(row.get("zona") or "").strip().upper() or "",
                     encuesta=(row["encuesta"] or "").strip(),
                     id_qualtrics=(row.get("id_qualtrics") or "").strip(),
                 )
@@ -151,7 +140,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         return Response({"created": created}, status=201)
 
     # ---------------------------
-    # Acciones del técnico/auditor
+    # Acciones del técnico
     # ---------------------------
 
     @extend_schema(
@@ -185,83 +174,11 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         obj.asignado_a = request.user
         obj.estado = EstadoAsignacion.ASIGNADA
         obj.save(update_fields=["asignado_a", "estado", "updated_at"])
-
-        HistorialAsignacion.objects.create(
-            asignacion=obj,
-            accion=HistorialAsignacion.Accion.ASIGNADA_TECNICO,
-            detalles=f"Autoasignada por técnico {request.user.email}",
-            usuario=request.user,
-        )
-        return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
-
-    @extend_schema(
-        summary="Asignar a un técnico (auditor/admin)",
-        request={'application/json': {
-            'type': 'object',
-            'properties': {'tecnico_id': {'type': 'integer'}},
-            'required': ['tecnico_id'],
-        }},
-        responses=DireccionAsignadaSerializer,
-    )
-    @action(detail=True, methods=["patch"], url_path="asignar_a")
-    def asignar_a(self, request, pk=None):
-        obj = self.get_object()
-        u = request.user
-        if getattr(u, "rol", None) != "auditor" and not getattr(u, "is_superuser", False):
-            return Response({"detail": "Solo auditor/admin."}, status=403)
-
-        try:
-            tecnico_id = int(request.data.get("tecnico_id"))
-        except (TypeError, ValueError):
-            return Response({"detail": "tecnico_id inválido."}, status=400)
-
-        try:
-            tech = Usuario.objects.get(id=tecnico_id, rol="tecnico", is_active=True)
-        except Usuario.DoesNotExist:
-            return Response({"detail": "Técnico no encontrado o inactivo."}, status=404)
-
-        prev = obj.asignado_a
-        obj.asignado_a = tech
-        obj.estado = EstadoAsignacion.ASIGNADA
-        obj.save(update_fields=["asignado_a", "estado", "updated_at"])
-
-        HistorialAsignacion.objects.create(
-            asignacion=obj,
-            accion=HistorialAsignacion.Accion.ASIGNADA_TECNICO,
-            detalles=f"Asignada por auditor a {tech.email} (antes: {prev.email if prev else 'sin técnico'})",
-            usuario=u,
-        )
-        return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
-
-    @extend_schema(
-        summary="Desasignar (auditor/admin) y dejar PENDIENTE",
-        responses=DireccionAsignadaSerializer,
-    )
-    @action(detail=True, methods=["patch"], url_path="desasignar")
-    def desasignar(self, request, pk=None):
-        obj = self.get_object()
-        u = request.user
-        if getattr(u, "rol", None) != "auditor" and not getattr(u, "is_superuser", False):
-            return Response({"detail": "Solo auditor/admin."}, status=403)
-
-        if obj.estado == EstadoAsignacion.VISITADA:
-            return Response({"detail": "No se puede desasignar una visita completada."}, status=400)
-
-        prev = obj.asignado_a
-        obj.asignado_a = None
-        obj.estado = EstadoAsignacion.PENDIENTE
-        obj.save(update_fields=["asignado_a", "estado", "updated_at"])
-
-        HistorialAsignacion.objects.create(
-            asignacion=obj,
-            accion=HistorialAsignacion.Accion.DESASIGNADA,
-            detalles=f"Desasignada (antes: {prev.email if prev else 'sin técnico'})",
-            usuario=u,
-        )
         return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
 
     @extend_schema(
         summary="Prefill para el front (cabecera y choices)",
+        description="Devuelve técnico actual, datos de cliente, marca/tecnología y choices de 'Estado del Cliente'.",
         responses={200: {"type": "object"}, 403: OpenApiResponse(description="No autorizado")},
     )
     @action(detail=True, methods=["get"], url_path="prefill")
@@ -313,13 +230,18 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             'required': ['estado_cliente'],
         }},
         responses={200: {"type": "object"}, 400: OpenApiResponse(description="Datos inválidos"), 403: OpenApiResponse(description="No autorizado")},
+        examples=[
+            OpenApiExample("Autoriza", value={"estado_cliente": "autoriza"}),
+            OpenApiExample("Reagendó", value={"estado_cliente": "reagendo", "fecha": "2025-09-26", "bloque": "10-13"}),
+            OpenApiExample("Rechaza",  value={"estado_cliente": "rechaza"}),
+        ]
     )
     @action(detail=True, methods=["post"], url_path="estado_cliente")
     def estado_cliente(self, request, pk=None):
         obj = self.get_object()
         u = request.user
         if getattr(u, "rol", None) == "tecnico" and obj.asignado_a_id != u.id:
-            return Response({"detail": "Solo el técnico asignado o admin/auditor puede operar."}, status=403)
+            return Response({"detail": "Solo el técnico asignado o administrador puede operar."}, status=403)
 
         estado = (request.data.get("estado_cliente") or "").strip().lower()
 
@@ -336,8 +258,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             fecha = parse_date(fecha_str)
             if not fecha:
                 return Response({"detail": "Formato de fecha inválido. Use YYYY-MM-DD."}, status=400)
-            if fecha < timezone.localdate():
-                return Response({"detail": "La fecha no puede ser en el pasado."}, status=400)
             if bloque not in ("10-13", "14-18"):
                 return Response({"detail": "Bloque inválido. Use 10-13 o 14-18."}, status=400)
 
@@ -368,18 +288,17 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         obj = self.get_object()
         u = request.user
         if getattr(u, "rol", None) == "tecnico" and obj.asignado_a_id != u.id:
-            return Response({"detail": "Solo el técnico asignado o auditor/admin puede reagendar."}, status=403)
+            return Response({"detail": "Solo el técnico asignado o administrador puede reagendar."}, status=403)
 
         fecha_str = (request.data.get("fecha") or "").strip()
         bloque = (request.data.get("bloque") or "").strip()
+
         if not fecha_str or not bloque:
             return Response({"detail": "Debe enviar fecha (YYYY-MM-DD) y bloque (10-13/14-18)."}, status=400)
 
         fecha = parse_date(fecha_str)
         if not fecha:
             return Response({"detail": "Formato de fecha inválido. Use YYYY-MM-DD."}, status=400)
-        if fecha < timezone.localdate():
-            return Response({"detail": "La fecha no puede ser en el pasado."}, status=400)
         if bloque not in ("10-13", "14-18"):
             return Response({"detail": "Bloque inválido. Use 10-13 o 14-18."}, status=400)
 
@@ -390,13 +309,33 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
         return Response(DireccionAsignadaSerializer(obj).data)
 
+    @extend_schema(
+        summary="Cerrar visita sin auditoría",
+        request={'application/json': {'type': 'object', 'properties': {'motivo': {'type': 'string', 'enum': ['sin_moradores','rechaza','contingencia','masivo']}}, 'required': ['motivo']}},
+        responses=DireccionAsignadaSerializer,
+    )
+    @action(detail=True, methods=["post"], url_path="cerrar")
+    def cerrar(self, request, pk=None):
+        obj = self.get_object()
+        u = request.user
+        if getattr(u, "rol", None) == "tecnico" and obj.asignado_a_id != u.id:
+            return Response({"detail": "No autorizado."}, status=403)
+
+        motivo = (request.data.get("motivo") or "").strip()
+        if motivo not in ("sin_moradores", "rechaza", "contingencia", "masivo"):
+            return Response({"detail": "motivo inválido."}, status=400)
+
+        obj.estado = EstadoAsignacion.VISITADA
+        obj.save(update_fields=["estado", "updated_at"])
+        return Response(DireccionAsignadaSerializer(obj).data)
+
     @extend_schema(summary="Mis direcciones (técnico)", responses=DireccionAsignadaListaSerializer)
     @action(detail=False, methods=["get"], url_path="mias")
     def mias(self, request):
         u = request.user
         if getattr(u, "rol", None) != "tecnico":
             return Response({"detail": "Solo técnicos."}, status=403)
-        qs = self.get_queryset().filter(asignado_a=u).order_by("fecha", "comuna", "direccion")
+        qs = self.get_queryset().filter(asignado_a=u)
         page = self.paginate_queryset(qs)
         if page is not None:
             return self.get_paginated_response(self.get_serializer(page, many=True).data)
@@ -489,5 +428,3 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             "mias": DireccionAsignadaListaSerializer(mias[:100], many=True, context={"request": request}).data,
             "disponibles": DireccionAsignadaListaSerializer(disp[:100], many=True, context={"request": request}).data,
         })
-
-AsignacionViewSet = DireccionAsignadaViewSet

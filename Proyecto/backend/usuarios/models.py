@@ -18,7 +18,7 @@ class UsuarioManager(BaseUserManager):
         return user
 
     def create_superuser(self, email, password=None, **extra_fields):
-        # Superusuario solo para /admin; la API se maneja con rol (auditor/tecnico)
+        # Superusuario solo para /admin; la API se maneja con rol (administrador/tecnico)
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
         extra_fields.setdefault("is_active", True)
@@ -34,7 +34,7 @@ class UsuarioManager(BaseUserManager):
 class Usuario(AbstractUser):
     ROLES = (
         ("tecnico", "Técnico"),
-        ("auditor", "Auditor"),
+        ("administrador", "Administrador"),
     )
 
     # Deshabilitamos username
@@ -49,14 +49,13 @@ class Usuario(AbstractUser):
     first_name = models.CharField(max_length=100, verbose_name="Nombre")
     last_name  = models.CharField(max_length=100, verbose_name="Apellido")
 
-    # Rol (solo 2)
-    rol = models.CharField(max_length=10, choices=ROLES, default="tecnico", verbose_name="Rol")
+    # Rol
+    rol = models.CharField(max_length=20, choices=ROLES, default="tecnico", verbose_name="Rol")
 
     # RUT opción B: número y dígito verificador
     rut_num = models.PositiveIntegerField(null=True, blank=True, verbose_name="RUT (número sin DV)")
     dv      = models.CharField(max_length=1, null=True, blank=True, verbose_name="Dígito verificador")
 
-    # Índice/único compuesto para evitar duplicados (solo si ambos vienen)
     class Meta:
         db_table = "usuarios"
         verbose_name = "Usuario"
@@ -71,7 +70,6 @@ class Usuario(AbstractUser):
 
     objects = UsuarioManager()
 
-    # Representación "XXXXXXXX-D" (sin puntos)
     @property
     def rut(self) -> str:
         if self.rut_num is None or not self.dv:
