@@ -11,7 +11,7 @@ const LIST_ENDPOINT = "/api/asignaciones/";
 const MARCAS = ["CLARO", "VTR"];
 const TECNOLOGIAS = ["HFC", "NFTT", "FTTH"];
 const ZONAS = ["NORTE", "CENTRO", "SUR"];
-const ESTADOS = ["pendiente", "asignada", "completada", "cancelada"];
+const ESTADOS = ["pendiente", "asignada", "completada", "cancelada", "reagendada"];
 
 function pickResults(data) {
   if (!data) return [];
@@ -19,6 +19,24 @@ function pickResults(data) {
   if (Array.isArray(data.results)) return data.results;
   return [];
 }
+
+  // Convierte "YYYY-MM-DD" (o con hora) a "DD/MM/YYYY" sin problemas de zona horaria
+  function ymdToDmy(s) {
+    if (!s) return "—";
+    const ymd = String(s).slice(0, 10);
+    const [y, m, d] = ymd.split("-");
+    if (!y || !m || !d) return "—";
+    return `${d.padStart(2, "0")}/${m.padStart(2, "0")}/${y}`;
+  }
+
+  function getEffectiveDate(it) {
+    if (String(it.estado).toUpperCase() === "REAGENDADA" && it.reagendado_fecha) {
+      return it.reagendado_fecha;
+    }
+    return it.fecha || "";
+  }
+
+
 
 export default function AuditorDireccionesLista() {
   const { user } = useAuth();
@@ -176,7 +194,7 @@ export default function AuditorDireccionesLista() {
             <tbody>
               {filtered.map((it) => (
                 <tr key={it.id} style={{ borderTop: "1px solid #e5e7eb" }}>
-                  <td>{it.fecha ? new Date(it.fecha).toLocaleDateString() : "—"}</td>
+                  <td>{ymdToDmy(getEffectiveDate(it))}</td>
                   <td>{it.direccion}</td>
                   <td>{it.comuna}</td>
                   <td>{it.zona}</td>

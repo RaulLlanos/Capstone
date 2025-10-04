@@ -9,7 +9,11 @@ import styles from "./Login.module.css";
 const MARCAS = ["CLARO", "VTR"];
 const TECNOLOGIAS = ["HFC", "NFTT", "FTTH"];
 const ZONAS = ["NORTE", "CENTRO", "SUR"];
-const ENCUESTAS = ["post_visita", "instalacion", "operaciones"];
+const ENCUESTAS = [
+  { value: "post_visita", label: "Post visita"   },
+  { value: "instalacion", label: "Instalación"   },
+  { value: "operaciones", label: "Operaciones"   },
+];
 const ESTADOS = ["PENDIENTE", "ASIGNADA", "COMPLETADA", "CANCELADA"]; // backend uppercase
 
 // Comunas de Santiago agrupadas por zona
@@ -300,7 +304,7 @@ export default function AuditorDireccionEdit() {
                 onChange={onChange}
                 disabled={saving || !form.zona}
               >
-                <option value="">{form.zona ? "— seleccionar —" : "Selecciona zona primero"}</option>
+                <option value="">{form.zona ? "— Seleccionar —" : "Selecciona zona primero"}</option>
                 {comunasOptions.map((c) => (
                   <option key={c} value={c}>{c}</option>
                 ))}
@@ -312,7 +316,7 @@ export default function AuditorDireccionEdit() {
               <label className={styles.label} style={{ margin: 0 }}>
                 Zona
                 <select className={styles.select} name="zona" value={form.zona} onChange={onChange} disabled={saving}>
-                  <option value="">— seleccionar —</option>
+                  <option value="">— Seleccionar —</option>
                   {ZONAS.map((z) => <option key={z} value={z}>{z[0] + z.slice(1).toLowerCase()}</option>)}
                 </select>
                 {fieldErrors.zona && <small className={styles.error}>{fieldErrors.zona}</small>}
@@ -321,7 +325,7 @@ export default function AuditorDireccionEdit() {
               <label className={styles.label} style={{ margin: 0 }}>
                 Marca
                 <select className={styles.select} name="marca" value={form.marca} onChange={onChange} disabled={saving}>
-                  <option value="">— seleccionar —</option>
+                  <option value="">— Seleccionar —</option>
                   {MARCAS.map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
                 {fieldErrors.marca && <small className={styles.error}>{fieldErrors.marca}</small>}
@@ -330,7 +334,7 @@ export default function AuditorDireccionEdit() {
               <label className={styles.label} style={{ margin: 0 }}>
                 Tecnología
                 <select className={styles.select} name="tecnologia" value={form.tecnologia} onChange={onChange} disabled={saving}>
-                  <option value="">— seleccionar —</option>
+                  <option value="">— Seleccionar —</option>
                   {TECNOLOGIAS.map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>
                 {fieldErrors.tecnologia && <small className={styles.error}>{fieldErrors.tecnologia}</small>}
@@ -355,8 +359,8 @@ export default function AuditorDireccionEdit() {
               <label className={styles.label} style={{ margin: 0 }}>
                 Encuesta de origen
                 <select className={styles.select} name="encuesta" value={form.encuesta} onChange={onChange} disabled={saving}>
-                  <option value="">— seleccionar —</option>
-                  {ENCUESTAS.map((e) => <option key={e} value={e}>{e}</option>)}
+                  <option value="">— Seleccionar —</option>
+                  {ENCUESTAS.map((e) => <option key={e.value} value={e.value}>{e.label}</option>)}
                 </select>
                 {fieldErrors.encuesta && <small className={styles.error}>{fieldErrors.encuesta}</small>}
               </label>

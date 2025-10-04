@@ -11,6 +11,9 @@ import AuditorDireccionAdd from "../pages/AuditorDireccionAdd";
 import TecnicoDireccionesLista from "../pages/TecnicoDireccionesLista";
 import AuditorDireccionesLista from "../pages/AuditorDireccionesLista";
 import AuditorDireccionEdit from "../pages/AuditorDireccionEdit";
+import TecnicoReagendar from "../pages/TecnicoReagendar"
+import TecnicoAuditoriaAdd from "../pages/TecnicoAuditoriaAdd";
+import TecnicoAuditoriaVer from "../pages/TecnicoAuditoriaVer";
 
 /** Guard 1: autenticación básica */
 function RequireAuth() {
@@ -103,6 +106,9 @@ function AppShell() {
           <Route element={<RequireRole allowed={["tecnico"]} />}>
             <Route path="/tecnico" element={<TecnicoDashboard />} />
             <Route path="/tecnico/direcciones" element={<TecnicoDireccionesLista />} />
+            <Route path="/tecnico/reagendar/:id" element={<TecnicoReagendar />} />
+            <Route path="/tecnico/auditoria/nueva/:id" element={<TecnicoAuditoriaAdd />} />
+            <Route path="/tecnico/auditoria/ver/:id" element={<TecnicoAuditoriaVer />} />
           </Route>
         </Route>
 

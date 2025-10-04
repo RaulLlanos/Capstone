@@ -1,131 +1,152 @@
+/* Contenedor general */
 .wrapper {
+  min-height: 100dvh;
   display: grid;
-  gap: 16px;
+  place-items: start center;
+  background: linear-gradient(180deg, #f7f7fb 0%, #eef1f6 100%);
+  padding: 24px;
 }
 
-.headerRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
+/* Tarjeta principal */
+.card {
+  width: 100%;
+  max-width: 1024px;
+  background: #fff;
+  border: 1px solid #eaeaea;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 4px 22px rgba(0,0,0,0.06);
 }
 
+/* Encabezado */
+.header {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 16px;
+}
 .title {
   margin: 0;
   font-size: 22px;
 }
-
-.card {
-  background: #fff;
-  border: 1px solid #eaeaea;
-  border-radius: 12px;
-  padding: 16px;
-}
-
-.toolbar {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-
-.input, .select {
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: #fff;
-  outline: none;
+.subtitle {
+  margin: 0;
+  color: #6b7280;
   font-size: 14px;
 }
-.input:focus, .select:focus {
-  border-color: #FF2315;
+
+/* Filtros y formularios */
+.form {
+  display: grid;
+  gap: 12px;
+}
+.filtersRow {
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+}
+@media (max-width: 900px) {
+  .filtersRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+.label {
+  display: grid;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 14px;
+  outline: none;
+  background: #fff;
+}
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: #2563eb;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
 }
 
-.btn {
-  height: 36px;
-  padding: 0 12px;
+/* Secciones de lista */
+.sectionTitle {
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+.listGrid {
+  display: grid;
+  gap: 10px;
+}
+.cardItem {
   border: 1px solid #e5e7eb;
-  background: #fff;
-  border-radius: 8px;
-  cursor: pointer;
-  font-weight: 600;
-}
-.btn:hover { filter: brightness(0.90); }
-.btn:active { transform: translateY(1px); }
-
-.btnPrimary {
-  background: #FF2315;
-  color: #fff;
-  border-color: #FF2315;
-}
-
-.tableWrap {
-  overflow: auto;
-  border: 1px solid #f0f0f0;
   border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+}
+.cardItemTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
 }
 
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
+/* Estados y helpers */
+.error {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+.success {
+  background: #e6f6ee;
+  color: #065f46;
+  border: 1px solid #b7ebcf;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+.helper {
+  color: #6b7280;
+  font-size: 12px;
 }
 
-.th, .td {
-  padding: 10px 12px;
-  text-align: left;
-  border-bottom: 1px solid #f7f7f7;
-  white-space: nowrap;
-}
-
-.thead {
-  position: sticky;
-  top: 0;
-  background: #fafafa;
-  z-index: 1;
-  border-bottom: 1px solid #eee;
-}
-
-.rowHighlight {
-  background: rgba(255, 215, 0, 0.18);
-  transition: background 0.2s ease;
-}
-
+/* Acciones */
 .actions {
   display: flex;
   gap: 8px;
+  margin-top: 6px;
 }
-
-.tag {
+.button {
+  appearance: none;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #FF2315; /* rojo Claro */
+  color: #fff;
+  transition: filter .15s ease, transform .05s ease;
+}
+.button:hover { filter: brightness(0.95); }
+.button:active { transform: translateY(1px); }
+.badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 4px 8px;
   border-radius: 999px;
   font-size: 12px;
-  font-weight: 600;
-  text-transform: capitalize;
-}
-.tagProgramada { background: #eef2ff; color: #3730a3; }
-.tagEnCurso    { background: #ecfeff; color: #155e75; }
-.tagCompletada { background: #ecfdf5; color: #065f46; }
-.tagCancelada  { background: #fef2f2; color: #991b1b; }
-
-.empty {
-  text-align: center;
-  color: #6b7280;
-  padding: 24px;
+  line-height: 1;
+  border: 1px solid transparent;
 }
 
-.sectionTitle {
-  margin: 0 0 8px;
-  font-size: 16px;
-  font-weight: 700;
-}
-
-.quickRow {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+.badgeReagendado {
+  background: #fff7ed;      /* ámbar suave */
+  color: #9a3412;           /* ámbar oscuro */
+  border-color: #fed7aa;
 }
