@@ -51,7 +51,7 @@ function RedirectByRole() {
   if (initializing) return null;
   if (!user) return <Navigate to="/login" replace />;
 
-  return user.role === "auditor"
+  return user.role === "administrador"
     ? <Navigate to="/auditor" replace />
     : <Navigate to="/tecnico" replace />;
 }
@@ -94,7 +94,7 @@ function AppShell() {
           <Route index element={<RedirectByRole />} />
 
           {/* AUDITOR */}
-          <Route element={<RequireRole allowed={["auditor"]} />}>
+          <Route element={<RequireRole allowed={["administrador"]} />}>
             <Route path="/auditor" element={<AuditorDashboard />} />
             <Route path="/registro" element={<Registro />} />
             <Route path="/auditor/direcciones/nueva" element={<AuditorDireccionAdd />} />
