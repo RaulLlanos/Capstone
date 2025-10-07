@@ -112,30 +112,32 @@ export default function TecnicoReagendar() {
       return;
     }
 
+    // Reemplaza el bloque try de handleSubmit por este:
     try {
-      setSaving(true);
-      await api.get("/auth/csrf").catch(() => {});
-      await enviarReagendar();
-      setOk("Reagendamiento enviado correctamente.");
-      // limpiamos campos de acción; mantenemos la selección
-      setForm((f) => ({ ...f, fecha: "", bloque: "", motivo: "" }));
-      // refrescamos por si cambió el estado/reagendado_*
-      await loadMine();
-    } catch (err) {
-      const data = err?.response?.data || {};
-      const fe2 = {};
-      if (data && typeof data === "object") {
-        Object.entries(data).forEach(([k, v]) => {
-          if (Array.isArray(v)) fe2[k] = v.join(" ");
-          else if (typeof v === "string") fe2[k] = v;
+    setSaving(true);
+    await api.get("/auth/csrf").catch(() => {});
+    await enviarReagendar();
+
+    // Si llegaste a esta pantalla desde una asignación específica (:id en la URL),
+    // vuelve al listado del técnico, mostrando un flash y forzando reload.
+    if (routeId) {
+        navigate("/tecnico", {
+        replace: true,
+        state: { flash: "Reagendado con éxito", reload: true },
         });
-      }
-      if (Object.keys(fe2).length) setFieldErrors((old) => ({ ...old, ...fe2 }));
-      else setError(data.detail || data.error || "No se pudo reagendar.");
-      console.error(err);
-    } finally {
-      setSaving(false);
+        return; // importante: no sigas, ya navegaste
     }
+
+    // Si NO venías con :id (modo selector), te quedas en la página:
+    setOk("Reagendamiento enviado correctamente.");
+    setForm((f) => ({ ...f, fecha: "", bloque: "", motivo: "" }));
+    await loadMine();
+    } catch (err) {
+    // (…tu manejo de errores tal cual lo tienes…)
+    } finally {
+    setSaving(false);
+    }
+
   };
 
   const showSelector = !routeId; // si vino :id, ocultamos el dropdown
