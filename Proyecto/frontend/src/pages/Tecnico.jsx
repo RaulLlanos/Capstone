@@ -72,7 +72,7 @@ function showReagendadoBadge(it) {
   // si la fecha efectiva ES hoy, no mostramos badge
   return eff !== todayLocalYMD();
 }
-const isCompletada = (it) => String(it.estado || "").toUpperCase() === "COMPLETADA";
+const isCompletada = (it) => String(it.estado || "").toUpperCase() === "VISITADA";
 
 // asignación pertenece al usuario
 function isMine(item, user) {
@@ -207,6 +207,7 @@ export default function Tecnico() {
 
     return items
       .filter((it) => isMine(it, user))
+      .filter((it) => !isCompletada(it)) 
       .filter((it) => {
         if (filtro.estado && String(it.estado || "").toUpperCase() !== filtro.estado) return false;
         if (filtro.tecnologia && String(it.tecnologia || "") !== filtro.tecnologia) return false;
@@ -253,10 +254,8 @@ export default function Tecnico() {
   const renderFechaInfo = (it) => {
     const effDate = getEffectiveDate(it);
     const effBlock = getEffectiveBlock(it);
-    const estado = String(it.estado || "").toUpperCase();
     const parts = [effDate ? ymdToDmy(effDate) : "—"];
     if (effBlock) parts.push(effBlock);
-    parts.push(estado);
     return parts.join(" · ");
   };
 
@@ -275,7 +274,7 @@ export default function Tecnico() {
           it.id === item.id
             ? {
                 ...it,
-                estado: "REAGENDADA", // por si backend lo usa así
+                estado: "REAGENDADA", 
                 reagendado_fecha: hoyYMD,
                 reagendado_bloque: bloque,
               }
@@ -316,19 +315,6 @@ export default function Tecnico() {
             disabled={loading}
           />
 
-          <select
-            className={styles.select}
-            value={filtro.estado}
-            onChange={(e) => setFiltro((f) => ({ ...f, estado: e.target.value }))}
-            disabled={loading}
-          >
-            <option value="">Todos los estados</option>
-            {ESTADOS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
 
           <select
             className={styles.select}

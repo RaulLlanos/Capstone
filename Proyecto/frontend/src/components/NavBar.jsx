@@ -36,7 +36,10 @@ export default function NavBar() {
         { to: "/registro", label: "Crear usuario" },
       ];
     }
-    if (isTecnico) return [{ to: "/tecnico/direcciones", label: "Direcciones" }];
+    if (isTecnico) return [
+      { to: "/tecnico/direcciones", label: "Direcciones" },
+      { to: "/tecnico/completadas", label: "Visitadas" }
+    ];
     return [];
   }, [user, isAdmin, isTecnico]);
 
