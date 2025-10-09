@@ -11,7 +11,7 @@ const LIST_ENDPOINT = "/api/asignaciones/";
 const MARCAS = ["CLARO", "VTR"];
 const TECNOLOGIAS = ["HFC", "NFTT", "FTTH"];
 const ZONAS = ["NORTE", "CENTRO", "SUR"];
-const ESTADOS = ["pendiente", "asignada", "completada", "cancelada", "reagendada"];
+const ESTADOS = ["pendiente", "asignada", "visitada", "cancelada", "reagendada"];
 
 function pickResults(data) {
   if (!data) return [];
