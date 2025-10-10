@@ -1,25 +1,17 @@
-# core/permissions.py
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
+# === Helpers ===
 def _is_admin(user) -> bool:
-    """
-    Verdadero si el usuario autenticado tiene rol 'administrador'.
-    """
-    return bool(
-        user
-        and getattr(user, "is_authenticated", False)
-        and getattr(user, "rol", None) == "administrador"
-    )
+    return bool(user and getattr(user, "is_authenticated", False) and getattr(user, "rol", None) == "administrador")
 
+def _is_tech(user) -> bool:
+    return bool(user and getattr(user, "is_authenticated", False) and getattr(user, "rol", None) == "tecnico")
 
-# ========================
-# Nombres nuevos (claros)
-# ========================
-
+# === Nombres “limpios” ===
 class AdminFull_TechReadOnly(BasePermission):
     """
-    - Administrador: acceso total (CRUD).
-    - Técnico: solo lectura (GET/HEAD/OPTIONS).
+    - Administrador: CRUD completo.
+    - Técnico: solo lectura.
     """
     def has_permission(self, request, view):
         user = request.user
@@ -27,14 +19,14 @@ class AdminFull_TechReadOnly(BasePermission):
             return False
         if _is_admin(user):
             return True
-        if getattr(user, "rol", None) == "tecnico":
+        if _is_tech(user):
             return request.method in SAFE_METHODS
         return False
 
 
 class AdminFull_TechReadOnlyPlusActions(BasePermission):
     """
-    - Administrador: acceso total (CRUD).
+    - Administrador: CRUD completo.
     - Técnico: lectura + POST en acciones explícitas del ViewSet.
       El ViewSet puede declarar:
           tech_allowed_actions = {'asignarme', 'estado_cliente', 'reagendar', 'cerrar'}
@@ -48,7 +40,7 @@ class AdminFull_TechReadOnlyPlusActions(BasePermission):
             return False
         if _is_admin(user):
             return True
-        if getattr(user, "rol", None) == "tecnico":
+        if _is_tech(user):
             if request.method in SAFE_METHODS:
                 return True
             allowed = getattr(view, "tech_allowed_actions", self.DEFAULT_ACTIONS)
@@ -58,8 +50,8 @@ class AdminFull_TechReadOnlyPlusActions(BasePermission):
 
 class AdminOrSuperuserFull_TechReadAndPost(BasePermission):
     """
-    - Administrador (o superuser en /admin/): CRUD completo.
-    - Técnico: lectura y POST (crear lo que le corresponda; la 'propiedad' se valida en la vista/serializer).
+    - Administrador (o is_superuser): CRUD completo.
+    - Técnico: lectura y POST (la 'propiedad' se valida en vista/serializer).
     """
     def has_permission(self, request, view):
         user = request.user
@@ -67,7 +59,7 @@ class AdminOrSuperuserFull_TechReadAndPost(BasePermission):
             return False
         if _is_admin(user) or getattr(user, "is_superuser", False):
             return True
-        if getattr(user, "rol", None) == "tecnico":
+        if _is_tech(user):
             return (request.method in SAFE_METHODS) or (request.method == "POST")
         return False
 
@@ -83,7 +75,7 @@ class TechOwnsObjectOrAdmin(BasePermission):
             return False
         if _is_admin(user):
             return True
-        if getattr(user, "rol", None) != "tecnico":
+        if not _is_tech(user):
             return False
         if request.method in SAFE_METHODS:
             return True
@@ -93,11 +85,7 @@ class TechOwnsObjectOrAdmin(BasePermission):
         return owner_id == getattr(user, "id", None)
 
 
-# ======================================================
-# Alias de compatibilidad (no rompen tu código actual)
-# ======================================================
-# Los nombres antiguos quedan como alias a los nuevos,
-# para que tus imports existentes sigan funcionando.
+# === Alias retrocompatibles (si algo del proyecto viejo los importaba) ===
 AdminAuditorFull_TechReadOnly = AdminFull_TechReadOnly
 AdminAuditorFull_TechReadOnlyPlusActions = AdminFull_TechReadOnlyPlusActions
 AuditorOrSuperuserFull_TechReadAndPost = AdminOrSuperuserFull_TechReadAndPost

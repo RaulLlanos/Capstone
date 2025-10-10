@@ -18,7 +18,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, Sp
 
 # ✅ Import correcto (solo este)
 from asignaciones.views import DireccionAsignadaViewSet
-from auditoria.views import AuditoriaVisitaViewSet, IssueViewSet
+from auditoria.views import AuditoriaVisitaViewSet
 
 router = routers.DefaultRouter()
 router.register(r'usuarios', usuarios_views.UsuarioViewSet, basename='usuarios')
@@ -26,7 +26,6 @@ router.register(r'usuarios', usuarios_views.UsuarioViewSet, basename='usuarios')
 # Asignaciones / Auditorías
 router.register(r'asignaciones', DireccionAsignadaViewSet, basename='asignaciones')
 router.register(r'auditorias',   AuditoriaVisitaViewSet, basename='auditorias')
-router.register(r'issues',       IssueViewSet,           basename='issues')
 
 urlpatterns = [
     path('', lambda r: JsonResponse({

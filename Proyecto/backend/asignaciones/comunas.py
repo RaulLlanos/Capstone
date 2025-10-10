@@ -8,7 +8,7 @@ def _norm(s: str) -> str:
     s = "".join(c for c in s if not unicodedata.combining(c))
     return s.upper().strip()
 
-# === Agrupación por zonas (ajústala si tu malla cambia) ===
+# === Agrupación por zonas ===
 _Z_NORTE = {
     "Independencia", "Recoleta", "Huechuraba", "Conchalí", "Quilicura", "Renca",
 }

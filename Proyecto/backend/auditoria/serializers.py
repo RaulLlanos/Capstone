@@ -1,93 +1,90 @@
+# auditoria/serializers.py
+from django.utils import timezone
 from rest_framework import serializers
-from .models import AuditoriaVisita, Issue
 
-
-class IssueSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Issue
-        fields = "__all__"
-
+from .models import AuditoriaVisita
+from asignaciones.models import HistorialAsignacion  # DireccionAsignada no se usa aquí
 
 class AuditoriaVisitaSerializer(serializers.ModelSerializer):
-    """
-    - Crea auditoría sobre una DireccionAsignada.
-    - Inyecta snapshot (marca/tecnología/rut/id_vivienda/dirección) desde la asignación.
-    - Permite issues anidados opcionales.
-    - Valida fotos opcionalmente (si vienen en el mismo POST).
-    """
-    issues = IssueSerializer(many=True, required=False)
+    # --- Campos derivados de la asignación (solo lectura) ---
+    marca = serializers.CharField(source="asignacion.marca", read_only=True)
+    tecnologia = serializers.CharField(source="asignacion.tecnologia", read_only=True)
+    direccion = serializers.CharField(source="asignacion.direccion", read_only=True)
+    comuna = serializers.CharField(source="asignacion.comuna", read_only=True)
+    fecha = serializers.DateField(source="asignacion.fecha", read_only=True)
+    bloque = serializers.CharField(source="asignacion.bloque", read_only=True)
+    tecnico_id = serializers.IntegerField(source="asignacion.asignado_a", read_only=True)
 
     class Meta:
         model = AuditoriaVisita
-        fields = "__all__"
-        read_only_fields = (
+        fields = [
+            # originales (editables según tu flujo)
+            "id", "asignacion", "tecnico",
+            "estado_cliente",
+            "reagendado_fecha", "reagendado_bloque",
+            "ont_modem_ok",
+            "servicios", "categorias", "descripcion_problema", "fotos",
+            "bloque_agendamiento", "bloque_llegada", "bloque_proceso",
+            "bloque_config", "bloque_cierre", "percepcion",
             "created_at",
-            "marca", "tecnologia",
-            "rut_cliente", "id_vivienda", "direccion_cliente",
-        )
 
-    # --- helpers de validación de imagen ---
-    def _validate_image(self, fileobj, field_name):
-        if not fileobj:
-            return
-        content_type = getattr(fileobj, "content_type", "") or ""
-        if not content_type.startswith("image/"):
-            raise serializers.ValidationError({field_name: "Solo imágenes."})
-        size = getattr(fileobj, "size", 0) or 0
-        if size > 10 * 1024 * 1024:  # 10 MB
-            raise serializers.ValidationError({field_name: "Máximo 10MB por imagen."})
+            # agregados (solo lectura desde la asignación)
+            "marca", "tecnologia", "direccion", "comuna", "fecha", "bloque", "tecnico_id",
+        ]
+        read_only_fields = [
+            "id", "created_at", "tecnico",
+            "marca", "tecnologia", "direccion", "comuna", "fecha", "bloque", "tecnico_id",
+        ]
 
     def validate(self, attrs):
-        """
-        Chequeos:
-        - Si es técnico, solo puede crear sobre su propia asignación.
-        - Valida fotos si vienen en este mismo POST.
-        """
-        request = self.context.get("request")
-        asignacion = attrs.get("asignacion")
+        estado = attrs.get("estado_cliente") or getattr(self.instance, "estado_cliente", None)
 
-        if request and getattr(request.user, "rol", None) == "tecnico":
-            if asignacion and asignacion.asignado_a_id != request.user.id:
-                raise serializers.ValidationError("No autorizado para esta asignación.")
-
-        # Validación de imágenes (multipart)
-        if request and hasattr(request, "FILES"):
-            self._validate_image(request.FILES.get("foto_1"), "foto_1")
-            self._validate_image(request.FILES.get("foto_2"), "foto_2")
-            self._validate_image(request.FILES.get("foto_3"), "foto_3")
-
-        # Algunos parsers dejan archivos en initial_data
-        if hasattr(self, "initial_data"):
-            for fname in ("foto_1", "foto_2", "foto_3"):
-                f = self.initial_data.get(fname)
-                if hasattr(f, "content_type"):
-                    self._validate_image(f, fname)
-
+        # Si reagenda, requiere fecha futura y bloque
+        if estado == "reagendo":
+            f = attrs.get("reagendado_fecha")
+            b = attrs.get("reagendado_bloque")
+            if not f or not b:
+                raise serializers.ValidationError("Debe indicar fecha y bloque de reagendamiento.")
+            if f < timezone.localdate():
+                raise serializers.ValidationError("La fecha reagendada no puede ser pasada.")
         return attrs
 
     def create(self, validated_data):
-        issues_data = validated_data.pop("issues", [])
+        request = self.context.get("request")
+        u = getattr(request, "user", None)
+
         asignacion = validated_data["asignacion"]
+        # setea técnico que crea la auditoría (si es técnico)
+        validated_data["tecnico"] = u if u and getattr(u, "rol", None) == "tecnico" else None
 
-        # Construye auditoría con snapshot desde la asignación
-        auditoria = AuditoriaVisita.objects.create(
-            asignacion=asignacion,
-            nombre_auditor=validated_data.get("nombre_auditor", ""),
-            estado_cliente=validated_data.get("estado_cliente", ""),
-            marca=asignacion.marca,
-            tecnologia=asignacion.tecnologia,
-            rut_cliente=asignacion.rut_cliente,
-            id_vivienda=asignacion.id_vivienda,
-            direccion_cliente=asignacion.direccion,
-            # Si el request venía multipart con fotos, DRF setea estos campos solo si están en validated_data;
-            # para soportar eso vía serializer, podrías añadirlos a validated_data si te interesa.
-            foto_1=validated_data.get("foto_1"),
-            foto_2=validated_data.get("foto_2"),
-            foto_3=validated_data.get("foto_3"),
-        )
+        audit = super().create(validated_data)
 
-        # Crea issues anidados
-        for it in issues_data:
-            Issue.objects.create(auditoria=auditoria, **it)
+        # --- Efectos colaterales sobre la asignación (estado_cliente) + historial ---
+        if audit.estado_cliente == "reagendo":
+            asignacion.reagendado_fecha = audit.reagendado_fecha
+            asignacion.reagendado_bloque = audit.reagendado_bloque
+            asignacion.estado = "REAGENDADA"
+            asignacion.save()
+            HistorialAsignacion.objects.create(
+                asignacion=asignacion,
+                accion="reagendada",
+                detalles=f"Reagendada desde auditoría a {audit.reagendado_fecha} {audit.reagendado_bloque}",
+                usuario=u,
+            )
+        elif audit.estado_cliente == "autoriza":
+            HistorialAsignacion.objects.create(
+                asignacion=asignacion,
+                accion="auditoria_creada",
+                detalles="Auditoría con estado 'autoriza'.",
+                usuario=u,
+            )
+        else:
+            # sin_moradores / rechaza / contingencia / masivo
+            HistorialAsignacion.objects.create(
+                asignacion=asignacion,
+                accion="estado_cambiado",
+                detalles=f"Auditoría 'estado_cliente'={audit.estado_cliente}.",
+                usuario=u,
+            )
 
-        return auditoria
+        return audit
