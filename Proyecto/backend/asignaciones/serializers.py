@@ -2,7 +2,7 @@ from datetime import date
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import DireccionAsignada, HistorialAsignacion
+from .models import DireccionAsignada, HistorialAsignacion, BloqueHorario
 from usuarios.models import Usuario
 
 
@@ -90,6 +90,31 @@ class CsvRowResult(serializers.Serializer):
     errors = serializers.ListField(child=serializers.CharField(), required=False)
 
 
-# === NUEVO: serializer para el upload ===
+# === NUEVO: serializer para la acción de estado del cliente ===
+class EstadoClienteActionSerializer(serializers.Serializer):
+    """
+    Payload para POST /api/asignaciones/{id}/estado_cliente/
+    Muestra exactamente las 6 opciones de estado de cliente.
+    """
+    estado_cliente = serializers.ChoiceField(choices=[
+        ("autoriza", "autoriza"),
+        ("sin_moradores", "sin_moradores"),
+        ("rechaza", "rechaza"),
+        ("contingencia", "contingencia"),
+        ("masivo", "masivo"),
+        ("reagendo", "reagendo"),
+    ])
+    reagendado_fecha = serializers.DateField(required=False, allow_null=True)
+    reagendado_bloque = serializers.ChoiceField(
+        choices=BloqueHorario.choices, required=False, allow_null=True
+    )
+    ont_modem_ok = serializers.BooleanField(required=False)
+    servicios = serializers.ListField(child=serializers.CharField(), required=False)
+    categorias = serializers.DictField(required=False)
+    descripcion_problema = serializers.CharField(required=False, allow_blank=True)
+    fotos = serializers.ListField(child=serializers.CharField(), required=False)
+
+
+# === NUEVO: serializer input de archivo para upload ===
 class CargaCSVSerializer(serializers.Serializer):
     file = serializers.FileField()
