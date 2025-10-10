@@ -1,56 +1,53 @@
-# auditoria/models.py
 from django.db import models
-from asignaciones.models import DireccionAsignada
-
+from django.conf import settings
 
 class AuditoriaVisita(models.Model):
-    """
-    Registro de la auditoría cuando el cliente AUTORIZA (flujo Q5→formulario).
-    Guarda un snapshot de la asignación para trazabilidad.
-    """
-    asignacion = models.ForeignKey(
-        DireccionAsignada, on_delete=models.PROTECT, related_name='auditorias'
+    ESTADO_CLIENTE = (
+        ("autoriza", "Autoriza a ingresar"),
+        ("sin_moradores", "Sin Moradores"),
+        ("rechaza", "Rechaza"),
+        ("contingencia", "Contingencia externa"),
+        ("masivo", "Incidencia Masivo ClaroVTR"),
+        ("reagendo", "Reagendó"),
     )
-    nombre_auditor = models.CharField(max_length=100)
+    BLOQUES = (("10-13", "10:00-13:00"), ("14-18", "14:00-18:00"))
 
-    # Snapshot desde la asignación (marca/tecnología/identificadores/dirección)
-    marca = models.CharField(max_length=10)
-    tecnologia = models.CharField(max_length=10)
-    rut_cliente = models.CharField(max_length=20)
-    id_vivienda = models.CharField(max_length=50)
-    direccion_cliente = models.CharField(max_length=255)
+    asignacion = models.ForeignKey("asignaciones.DireccionAsignada", on_delete=models.PROTECT, related_name="auditorias")
+    tecnico    = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
 
-    # Q5 seleccionado (autoriza / sin_moradores / etc.). Aquí quedará 'autoriza'
-    estado_cliente = models.CharField(max_length=20)
+    # Q5
+    estado_cliente = models.CharField(max_length=20, choices=ESTADO_CLIENTE)
 
-    # Fotos opcionales
-    foto_1 = models.ImageField(upload_to='auditorias/%Y/%m/%d/', null=True, blank=True)
-    foto_2 = models.ImageField(upload_to='auditorias/%Y/%m/%d/', null=True, blank=True)
-    foto_3 = models.ImageField(upload_to='auditorias/%Y/%m/%d/', null=True, blank=True)
+    # Si reagendó (Q6, Q7)
+    reagendado_fecha = models.DateField(null=True, blank=True)
+    reagendado_bloque = models.CharField(max_length=10, choices=BLOQUES, null=True, blank=True)
+
+    # Q72
+    ont_modem_ok = models.BooleanField(null=True, blank=True)
+
+    # Q8..Q11/Q73
+    servicios = models.JSONField(default=list, blank=True)     # p.ej. ["internet","tv"]
+    categorias = models.JSONField(default=dict, blank=True)    # p.ej. {"internet":["cortes","intermitencia"], "tv":["pixelado"]}
+    descripcion_problema = models.TextField(blank=True, default="")
+
+    # Fotos simples (rutas/URLs o nombres de archivo; si tienes upload ya hecho, puedes ignorar)
+    fotos = models.JSONField(default=list, blank=True)
+
+    # Bloques de cuestionario (Q16..Q32 etc.)
+    bloque_agendamiento = models.JSONField(default=dict, blank=True)
+    bloque_llegada      = models.JSONField(default=dict, blank=True)
+    bloque_proceso      = models.JSONField(default=dict, blank=True)
+    bloque_config       = models.JSONField(default=dict, blank=True)
+    bloque_cierre       = models.JSONField(default=dict, blank=True)
+    percepcion          = models.JSONField(default=dict, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        verbose_name = 'Auditoría de Instalación'
-        verbose_name_plural = 'Auditorías de Instalación'
         indexes = [
-            models.Index(fields=['marca', 'tecnologia', 'estado_cliente']),
-            models.Index(fields=['created_at']),
+            models.Index(fields=["created_at"], name="auditoria_a_created_bb8ea3_idx"),
+            models.Index(fields=["estado_cliente"], name="auditoria_estado_idx"),
         ]
 
     def __str__(self):
-        return f"Auditoría #{self.id} - {self.direccion_cliente}"
-
-
-class Issue(models.Model):
-    """
-    Problemas reportados durante la auditoría (Internet/TV/Fono/Otro + detalle).
-    """
-    auditoria = models.ForeignKey(
-        AuditoriaVisita, on_delete=models.CASCADE, related_name='issues'
-    )
-    servicio = models.CharField(max_length=10, blank=True)
-    detalle = models.CharField(max_length=255, blank=True)
-
-    def __str__(self):
-        return f"Issue #{self.id} - {self.servicio}"
+        return f"AuditoriaVisita #{self.id} ({self.estado_cliente})"

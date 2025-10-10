@@ -1,430 +1,380 @@
-from django.db.models import Q
-from django.utils.dateparse import parse_date
+from datetime import datetime
+import csv
+import io
+import re
+from typing import List, Dict, Any
 
-from rest_framework import viewsets, status
+from django.db.models import Case, When, Value, IntegerField, Q
+from django.utils import timezone
+
+from openpyxl import load_workbook
+from rest_framework import viewsets
 from rest_framework.decorators import action
-from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
+from rest_framework.response import Response
+from rest_framework.parsers import MultiPartParser, FormParser
 
-import csv, io
-from django.db import transaction
+from drf_spectacular.utils import extend_schema
 
-from drf_spectacular.utils import (
-    extend_schema, extend_schema_view,
-    OpenApiParameter, OpenApiTypes, OpenApiExample, OpenApiResponse
-)
-
-from core.permissions import AdminAuditorFull_TechReadOnlyPlusActions
-from .models import DireccionAsignada, EstadoAsignacion
-from .serializers import DireccionAsignadaSerializer, DireccionAsignadaListaSerializer
+from core.permissions import AdminFull_TechReadOnlyPlusActions
 from usuarios.models import Usuario
 
-@extend_schema_view(
-    list=extend_schema(
-        summary="Listar direcciones",
-        description="Lista paginada y filtrable de direcciones.",
-        parameters=[
-            OpenApiParameter("marca", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("tecnologia", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("encuesta", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("asignado_a", OpenApiTypes.INT, OpenApiParameter.QUERY),
-            OpenApiParameter("estado", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("rut_cliente", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("id_vivienda", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("comuna", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("zona", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("fecha", OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter("reagendado_fecha", OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter("reagendado_bloque", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("search", OpenApiTypes.STR, OpenApiParameter.QUERY,
-                             description="Busca en dirección, comuna, RUT, id_vivienda, id_qualtrics"),
-        ],
-        responses=DireccionAsignadaListaSerializer,
-    ),
-    retrieve=extend_schema(summary="Detalle de dirección", responses=DireccionAsignadaSerializer),
-    create=extend_schema(summary="Crear dirección (solo administrador)", responses=DireccionAsignadaSerializer),
+from .models import DireccionAsignada, HistorialAsignacion
+from .serializers import (
+    DireccionAsignadaSerializer,
+    HistorialAsignacionSerializer,
+    CsvRowResult,
+    CargaCSVSerializer,
 )
+
+# ---------- Helpers para importar archivos ----------
+
+_HEADER_ALIASES = {
+    "rut_cliente": ["rut_cliente", "rut", "rut cliente"],
+    # 🔧 priorizamos los nombres que usa Claro
+    "id_vivienda": [
+        "id_vivienda_cliente", "id_vivienda", "pcs_cliente",
+        "customer_id", "customerid"
+    ],
+    "direccion": [
+        "direccion_cliente", "direccion", "direccion del cliente",
+        "dirección del cliente", "direccion_del_cliente",
+        "direccion_destinatario", "direccion_cliente_del_destinatario"
+    ],
+    "comuna": [
+        # 🔧 primero comuna_cliente (en tu archivo tiene datos; la columna "comuna" está vacía)
+        "comuna_cliente", "comuna", "comuna del cliente", "comuna_del_cliente"
+    ],
+    "marca": ["marca", "brand"],
+    "tecnologia": ["tecnologia", "customer_network_type"],
+    "encuesta": ["encuesta", "encuesta de origen", "survey_type"],
+    "id_qualtrics": ["id_qualtrics", "id_de_respuesta", "record_id"],
+    "fecha": ["fecha", "fecha_programada", "fecha_registrada", "transactiondate"],
+    "bloque": ["bloque", "bloque_horario", "bloque horario reagendamiento"],
+    "asignado_email": ["asignado_email", "correo_tecnico", "tecnico_email", "email_tecnico"],
+}
+
+_DATE_FORMATS = ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d")
+
+
+def _norm(s: str) -> str:
+    if s is None:
+        return ""
+    s = str(s).strip().lower()
+    for a, b in {"á":"a","é":"e","í":"i","ó":"o","ú":"u","ñ":"n"}.items():
+        s = s.replace(a, b)
+    s = re.sub(r"\s+", " ", s).replace(" ", "_")
+    return s
+
+def _s(val) -> str:
+    """string seguro con strip(), manejando ints/None."""
+    if val is None:
+        return ""
+    try:
+        return str(val).strip()
+    except Exception:
+        return ""
+
+def _build_header_map(raw_headers: List[str]) -> Dict[str, str]:
+    norm_headers = { _norm(h): h for h in raw_headers }
+    mapping = {}
+    for canon, aliases in _HEADER_ALIASES.items():
+        for alias in aliases:
+            k = _norm(alias)
+            if k in norm_headers:
+                mapping[canon] = norm_headers[k]
+                break
+    return mapping
+
+def _parse_date(val):
+    if not val:
+        return None
+    # Si viene ya como datetime/date desde openpyxl
+    if hasattr(val, "year"):
+        try:
+            return val.date() if hasattr(val, "date") else val
+        except Exception:
+            pass
+    val = _s(val)
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(val, fmt).date()
+        except Exception:
+            pass
+    return None
+
+def _normalize_bloque(val: str) -> str | None:
+    v = _s(val).lower()
+    if not v:
+        return None
+    if "10" in v and "13" in v:
+        return "10-13"
+    if "14" in v and "18" in v:
+        return "14-18"
+    if v in {"10-13", "14-18"}:
+        return v
+    return None
+
+def _header_score(names_norm: List[str]) -> int:
+    """Heurística para detectar la fila de encabezados en XLSX."""
+    score = 0
+    have = set(names_norm)
+    def any_alias(key):
+        return any(_norm(a) in have for a in _HEADER_ALIASES[key])
+    for key in ("direccion", "comuna", "id_vivienda", "rut_cliente", "fecha"):
+        if any_alias(key):
+            score += 1
+    return score
+
+def _rows_from_csv(f) -> List[Dict[str, Any]]:
+    data = f.read().decode("utf-8", errors="ignore")
+    reader = csv.DictReader(io.StringIO(data))
+    headers = list(reader.fieldnames or [])
+    header_map = _build_header_map(headers)
+    return [(header_map, r) for r in reader]
+
+def _rows_from_xlsx(f) -> List[Dict[str, Any]]:
+    wb = load_workbook(filename=io.BytesIO(f.read()), data_only=True)
+    ws = wb.worksheets[0]
+
+    all_rows = list(ws.iter_rows(values_only=True))
+    if not all_rows:
+        return []
+
+    # intenta detectar la fila de headers (primeras 10 filas)
+    header_idx = 0
+    for i in range(min(10, len(all_rows))):
+        names = [ _s(x) for x in (all_rows[i] or []) ]
+        if _header_score([_norm(n) for n in names]) >= 2:
+            header_idx = i
+            break
+
+    headers = [ _s(x) for x in (all_rows[header_idx] or []) ]
+    header_map = _build_header_map(headers)
+
+    rows = []
+    for raw in all_rows[header_idx+1:]:
+        if not any(raw):  # fila completamente vacía
+            continue
+        r = { headers[i]: (raw[i] if i < len(raw) else None) for i in range(len(headers)) }
+        rows.append((header_map, r))
+    return rows
+
+def _canon_get(row: Dict[str, Any], header_map: Dict[str, str], key: str) -> Any:
+    src = header_map.get(key)
+    return row.get(src) if src else None
+
+# ---------------------------------------------------
+
+
 class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     """
-    - Administrador: CRUD total + carga CSV
-    - Técnico: lectura + acciones: asignarme, prefill, estado_cliente, reagendar, cerrar
+    - Administrador: CRUD total + carga CSV/XLSX + reasignar/desasignar
+    - Técnico: lectura + acciones (asignarme, estado_cliente, reagendar, cerrar)
     """
     queryset = DireccionAsignada.objects.all().order_by("-created_at")
-    permission_classes = [IsAuthenticated, AdminAuditorFull_TechReadOnlyPlusActions]
-    parser_classes = (JSONParser, MultiPartParser, FormParser)
+    serializer_class = DireccionAsignadaSerializer
+    permission_classes = [IsAuthenticated, AdminFull_TechReadOnlyPlusActions]
 
-    tech_allowed_actions = {"asignarme", "estado_cliente", "reagendar", "cerrar"}
+    filterset_fields = ["estado", "comuna", "zona", "marca", "tecnologia", "encuesta", "asignado_a"]
+    search_fields = ["direccion", "comuna", "rut_cliente", "id_vivienda"]
+    ordering_fields = ["fecha", "created_at"]
 
-    filterset_fields = [
-        "marca", "tecnologia", "encuesta", "asignado_a", "estado",
-        "rut_cliente", "id_vivienda", "comuna", "zona", "fecha",
-        "reagendado_fecha", "reagendado_bloque",
-    ]
-    search_fields = ["direccion", "comuna", "rut_cliente", "id_vivienda", "id_qualtrics"]
+    def get_queryset(self):
+        u = self.request.user
+        qs = DireccionAsignada.objects.all()
 
-    def get_serializer_class(self):
-        if self.action in ("list", "disponibles", "mias", "tablero"):
-            return DireccionAsignadaListaSerializer
-        return DireccionAsignadaSerializer
+        if self.request.query_params.get("mine") and getattr(u, "rol", None) == "tecnico":
+            qs = qs.filter(asignado_a_id=u.id)
 
-    # ---------------------------
-    # Acciones de administración
-    # ---------------------------
-    @extend_schema(
-        summary="Carga masiva (CSV) (administrador)",
-        description=(
-            "Sube un CSV UTF-8 con los encabezados: "
-            "`fecha, tecnologia, marca, rut_cliente, id_vivienda, direccion, encuesta, id_qualtrics` "
-            "y opcionalmente `comuna, zona`."
-        ),
-        examples=[
-            OpenApiExample(
-                "CSV esperado",
-                description="Contenido ejemplo (2 filas)",
-                value=(
-                    "fecha,tecnologia,marca,rut_cliente,id_vivienda,direccion,comuna,zona,encuesta,id_qualtrics\n"
-                    "2025-09-05,FTTH,CLARO,12.345.678-9,HOME-001,\"Av. Siempre Viva 123, Ñuñoa\",Ñuñoa,CENTRO,instalacion,QX-001\n"
-                    "2025-09-06,HFC,VTR,9.876.543-2,HOME-002,\"Los Olmos 456, Maipú\",Maipú,SUR,post_visita,QX-002\n"
-                ),
+        order = self.request.query_params.get("order", "").lower()
+        if order == "prioridad":
+            prioridad = Case(
+                When(reagendado_fecha__isnull=False, then=Value(1)),
+                When(asignado_a__isnull=False, then=Value(2)),
+                default=Value(3),
+                output_field=IntegerField(),
             )
-        ],
-        responses={201: {"type": "object", "properties": {"created": {"type": "integer"}}}},
-    )
-    @action(detail=False, methods=["post"])
-    def upload_csv(self, request):
+            qs = qs.annotate(prioridad=prioridad).order_by("prioridad", "fecha", "id")
+        else:
+            qs = qs.order_by("fecha", "id")
+
+        fgte = self.request.query_params.get("fecha__gte")
+        flte = self.request.query_params.get("fecha__lte")
+        if fgte: qs = qs.filter(fecha__gte=fgte)
+        if flte: qs = qs.filter(fecha__lte=flte)
+
+        return qs
+
+    @action(detail=False, methods=["get"], url_path="historial")
+    def historial(self, request):
         u = request.user
-        if getattr(u, "rol", None) != "administrador":
-            return Response({"detail": "No autorizado."}, status=403)
+        tecnico_id = request.query_params.get("tecnico_id")
+        qs = HistorialAsignacion.objects.select_related("asignacion", "usuario").all()
 
-        file = request.FILES.get("file")
-        if not file:
-            return Response({"detail": 'Falta archivo CSV en campo "file".'}, status=400)
+        if getattr(u, "rol", None) == "tecnico":
+            qs = qs.filter(Q(usuario_id=u.id) | Q(asignacion__asignado_a_id=u.id))
+        else:
+            if tecnico_id:
+                qs = qs.filter(Q(usuario_id=tecnico_id) | Q(asignacion__asignado_a_id=tecnico_id))
 
+        qs = qs.order_by("-created_at", "-id")
+        page = self.paginate_queryset(qs)
+        s = HistorialAsignacionSerializer(page or qs, many=True)
+        return self.get_paginated_response(s.data) if page is not None else Response(s.data)
+
+    # === CARGA CSV/XLSX semanal ===
+    @extend_schema(request=CargaCSVSerializer)  # para que en /docs aparezca el input "file"
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="cargar_csv",
+        parser_classes=[MultiPartParser, FormParser],
+        serializer_class=CargaCSVSerializer,  # para que el Browsable API muestre el campo file
+    )
+    def cargar_csv(self, request):
+        """
+        Acepta:
+        - CSV (.csv)
+        - Excel (.xlsx) primera hoja
+
+        Mapea encabezados del archivo de Claro a nuestros nombres canónicos,
+        detectando automáticamente la fila real de encabezados en XLSX.
+        """
+        f = request.FILES.get("file")
+        if not f:
+            return Response({"detail": "Sube un archivo en el campo 'file'."}, status=400)
+
+        name = (_s(f.name)).lower()
         try:
-            decoded = file.read().decode("utf-8")
-        except UnicodeDecodeError:
-            return Response({"detail": "El CSV debe estar en UTF-8."}, status=400)
+            rows = _rows_from_xlsx(f) if name.endswith(".xlsx") else _rows_from_csv(f)
+        except Exception as e:
+            return Response({"detail": f"No se pudo leer el archivo: {e}"}, status=400)
 
-        reader = csv.DictReader(io.StringIO(decoded))
-        required = {"fecha", "tecnologia", "marca", "rut_cliente", "id_vivienda", "direccion", "encuesta"}
-        headers = set([h.strip() for h in (reader.fieldnames or [])])
-        if not required.issubset(headers):
-            return Response({"detail": f"Encabezados requeridos: {sorted(required)}"}, status=400)
+        results = []
+        today = timezone.localdate()
 
-        created = 0
-        with transaction.atomic():
-            for idx, row in enumerate(reader, start=2):
-                fecha_str = (row.get("fecha") or "").strip()
-                fecha_val = parse_date(fecha_str) if fecha_str else None
-                if fecha_str and not fecha_val:
-                    return Response(
-                        {"detail": f'Fila {idx}: fecha inválida "{fecha_str}" (use YYYY-MM-DD).'},
-                        status=400,
-                    )
+        for idx, (header_map, row) in enumerate(rows, start=2):
+            errors = []
+            created = False
+            updated = False
 
-                DireccionAsignada.objects.create(
-                    fecha=fecha_val,
-                    tecnologia=(row["tecnologia"] or "").strip().upper(),
-                    marca=(row["marca"] or "").strip().upper(),
-                    rut_cliente=(row["rut_cliente"] or "").strip(),
-                    id_vivienda=(row["id_vivienda"] or "").strip(),
-                    direccion=(row["direccion"] or "").strip(),
-                    comuna=(row.get("comuna") or "").strip(),
-                    zona=(row.get("zona") or "").strip().upper() or "",
-                    encuesta=(row["encuesta"] or "").strip(),
-                    id_qualtrics=(row.get("id_qualtrics") or "").strip(),
+            rut_cliente   = _s(_canon_get(row, header_map, "rut_cliente"))
+            id_vivienda   = _s(_canon_get(row, header_map, "id_vivienda"))
+            direccion     = _s(_canon_get(row, header_map, "direccion"))
+            comuna        = _s(_canon_get(row, header_map, "comuna"))
+
+            marca      = (_s(_canon_get(row, header_map, "marca")) or "CLARO").upper()
+            tecnologia = (_s(_canon_get(row, header_map, "tecnologia")) or "HFC").upper()
+            encuesta   = (_s(_canon_get(row, header_map, "encuesta")) or "post_visita").lower()
+            id_qual    = _s(_canon_get(row, header_map, "id_qualtrics"))
+
+            fecha_val  = _parse_date(_canon_get(row, header_map, "fecha"))
+            bloque     = _normalize_bloque(_canon_get(row, header_map, "bloque"))
+            asignado_email = _s(_canon_get(row, header_map, "asignado_email"))
+
+            # Fechas pasadas → las ignoramos (queda sin fecha)
+            if fecha_val and fecha_val < today:
+                fecha_val = None
+
+            if not direccion or not comuna:
+                errors.append("Faltan campos obligatorios: direccion/comuna.")
+
+            asignado = None
+            if asignado_email:
+                asignado = Usuario.objects.filter(email__iexact=asignado_email, rol="tecnico").first()
+                if not asignado:
+                    errors.append("asignado_email no existe o no es técnico.")
+
+            if errors:
+                results.append({"rownum": idx, "created": False, "updated": False, "errors": errors})
+                continue
+
+            defaults = {
+                "rut_cliente": rut_cliente,
+                "direccion": direccion,
+                "comuna": comuna,
+                "marca": marca or "CLARO",
+                "tecnologia": tecnologia or "HFC",
+                "encuesta": encuesta or "post_visita",
+                "id_qualtrics": id_qual,
+            }
+            if fecha_val:
+                defaults["fecha"] = fecha_val
+
+            # upsert por id_vivienda si viene, si no por (direccion, comuna)
+            if id_vivienda:
+                obj, was_created = DireccionAsignada.objects.get_or_create(
+                    id_vivienda=id_vivienda,
+                    defaults={**defaults, "estado": "PENDIENTE"},
                 )
-                created += 1
+            else:
+                obj, was_created = DireccionAsignada.objects.get_or_create(
+                    direccion=direccion,
+                    comuna=comuna,
+                    defaults={**defaults, "estado": "PENDIENTE"},
+                )
 
-        return Response({"created": created}, status=201)
+            # seteo/actualizo
+            for k, v in defaults.items():
+                setattr(obj, k, v)
 
-    # ---------------------------
-    # Acciones del técnico
-    # ---------------------------
+            if bloque:
+                obj.reagendado_bloque = None  # (opcional)
 
-    @extend_schema(
-        summary="Ver si me puedo asignar (preview) y datos de la dirección",
-        responses={200: {"type": "object"}},
-    )
-    @action(detail=True, methods=["get", "post"])
-    def asignarme(self, request, pk=None):
-        obj = self.get_object()
+            # estado / técnico
+            if asignado:
+                obj.asignado_a = asignado
+                if not obj.fecha and fecha_val:
+                    obj.fecha = fecha_val
+                obj.estado = "ASIGNADA"
+            else:
+                obj.asignado_a = None
+                obj.estado = "PENDIENTE"
 
-        if request.method == "GET":
-            can = (obj.asignado_a_id is None) and (obj.estado == EstadoAsignacion.PENDIENTE)
-            reason = None
-            if obj.asignado_a_id:
-                reason = f"Ya asignada a {obj.asignado_a.email}"
-            elif obj.estado != EstadoAsignacion.PENDIENTE:
-                reason = f"Estado actual={obj.estado} (requiere PENDIENTE)"
-            return Response({
-                "can_asignarme": can,
-                "reason": reason,
-                "asignacion": DireccionAsignadaListaSerializer(obj, context={"request": request}).data,
-            })
+            obj.save()
 
-        if request.user.rol != "tecnico":
-            return Response({"detail": "Solo técnicos pueden asignarse direcciones."}, status=403)
-        if obj.asignado_a_id:
-            return Response({"detail": f"No disponible: ya asignada a {obj.asignado_a.email}."}, status=400)
-        if obj.estado != EstadoAsignacion.PENDIENTE:
-            return Response({"detail": f"No disponible: estado actual={obj.estado} (requiere PENDIENTE)."}, status=400)
+            if was_created:
+                HistorialAsignacion.objects.create(
+                    asignacion=obj,
+                    accion="creada",
+                    detalles=f"Creada por carga XLS/CSV. {'Asignada a ' + asignado.email if asignado else 'Sin técnico'}",
+                    usuario=request.user,
+                )
+                created = True
+            else:
+                HistorialAsignacion.objects.create(
+                    asignacion=obj,
+                    accion="editada",
+                    detalles="Actualizada por carga XLS/CSV.",
+                    usuario=request.user,
+                )
+                updated = True
 
-        obj.asignado_a = request.user
-        obj.estado = EstadoAsignacion.ASIGNADA
-        obj.save(update_fields=["asignado_a", "estado", "updated_at"])
-        return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
-
-    @extend_schema(
-        summary="Prefill para el front (cabecera y choices)",
-        description="Devuelve técnico actual, datos de cliente, marca/tecnología y choices de 'Estado del Cliente'.",
-        responses={200: {"type": "object"}, 403: OpenApiResponse(description="No autorizado")},
-    )
-    @action(detail=True, methods=["get"], url_path="prefill")
-    def prefill(self, request, pk=None):
-        obj = self.get_object()
-        u = request.user
-        if getattr(u, "rol", None) == "tecnico" and obj.asignado_a_id != u.id:
-            return Response({"detail": "No autorizado."}, status=403)
+            results.append({"rownum": idx, "created": created, "updated": updated})
 
         return Response({
-            "tecnico_actual": (
-                {"id": obj.asignado_a.id,
-                 "nombre": f"{obj.asignado_a.first_name} {obj.asignado_a.last_name}".strip(),
-                 "email": obj.asignado_a.email}
-                if obj.asignado_a else None
-            ),
-            "cliente": {
-                "rut": obj.rut_cliente,
-                "id_vivienda": obj.id_vivienda,
-                "direccion": obj.direccion,
-                "comuna": obj.comuna,
-                "zona": obj.zona,
-            },
-            "marca": obj.marca,
-            "tecnologia": obj.tecnologia,
-            "estado_cliente_choices": [
-                {"value": "autoriza", "label": "Autoriza a ingresar"},
-                {"value": "sin_moradores", "label": "Sin Moradores"},
-                {"value": "rechaza", "label": "Rechaza"},
-                {"value": "contingencia", "label": "Contingencia externa"},
-                {"value": "masivo", "label": "Incidencia Masivo ClaroVTR"},
-                {"value": "reagendo", "label": "Reagendó"},
-            ],
-            "bloques": [
-                {"value": "10-13", "label": "10:00 a 13:00"},
-                {"value": "14-18", "label": "14:00 a 18:00"},
-            ],
+            "ok": True,
+            "rows": results,
+            "summary": {
+                "created": sum(1 for r in results if r["created"]),
+                "updated": sum(1 for r in results if r["updated"]),
+                "errors":  sum(1 for r in results if r.get("errors")),
+            }
         })
 
-    @extend_schema(
-        summary="Estado del Cliente (acción única para técnico)",
-        request={'application/json': {
-            'type': 'object',
-            'properties': {
-                'estado_cliente': {'type': 'string', 'enum': ['autoriza','sin_moradores','rechaza','contingencia','masivo','reagendo']},
-                'fecha':  {'type': 'string', 'format': 'date'},
-                'bloque': {'type': 'string', 'enum': ['10-13','14-18']},
-            },
-            'required': ['estado_cliente'],
-        }},
-        responses={200: {"type": "object"}, 400: OpenApiResponse(description="Datos inválidos"), 403: OpenApiResponse(description="No autorizado")},
-        examples=[
-            OpenApiExample("Autoriza", value={"estado_cliente": "autoriza"}),
-            OpenApiExample("Reagendó", value={"estado_cliente": "reagendo", "fecha": "2025-09-26", "bloque": "10-13"}),
-            OpenApiExample("Rechaza",  value={"estado_cliente": "rechaza"}),
-        ]
-    )
-    @action(detail=True, methods=["post"], url_path="estado_cliente")
-    def estado_cliente(self, request, pk=None):
+    @action(detail=True, methods=["patch"], url_path="desasignar")
+    def desasignar(self, request, pk=None):
         obj = self.get_object()
-        u = request.user
-        if getattr(u, "rol", None) == "tecnico" and obj.asignado_a_id != u.id:
-            return Response({"detail": "Solo el técnico asignado o administrador puede operar."}, status=403)
-
-        estado = (request.data.get("estado_cliente") or "").strip().lower()
-
-        if estado == "autoriza":
-            obj.estado = EstadoAsignacion.VISITADA
-            obj.save(update_fields=["estado", "updated_at"])
-            return Response({"next": "auditoria", "asignacion": DireccionAsignadaSerializer(obj).data})
-
-        if estado == "reagendo":
-            fecha_str = (request.data.get("fecha") or "").strip()
-            bloque = (request.data.get("bloque") or "").strip()
-            if not fecha_str or not bloque:
-                return Response({"detail": "Debe enviar fecha (YYYY-MM-DD) y bloque (10-13/14-18)."}, status=400)
-            fecha = parse_date(fecha_str)
-            if not fecha:
-                return Response({"detail": "Formato de fecha inválido. Use YYYY-MM-DD."}, status=400)
-            if bloque not in ("10-13", "14-18"):
-                return Response({"detail": "Bloque inválido. Use 10-13 o 14-18."}, status=400)
-
-            obj.reagendado_fecha = fecha
-            obj.reagendado_bloque = bloque
-            obj.estado = EstadoAsignacion.REAGENDADA
-            obj.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
-            return Response({"next": "gracias", "asignacion": DireccionAsignadaSerializer(obj).data})
-
-        if estado in ("sin_moradores", "rechaza", "contingencia", "masivo"):
-            obj.estado = EstadoAsignacion.VISITADA
-            obj.save(update_fields=["estado", "updated_at"])
-            return Response({"next": "gracias", "asignacion": DireccionAsignadaSerializer(obj).data})
-
-        return Response({"detail": "estado_cliente inválido."}, status=400)
-
-    @extend_schema(
-        summary="Reagendar visita (directo)",
-        request={'application/json': {
-            'type': 'object',
-            'properties': {'fecha': {'type': 'string', 'format': 'date'}, 'bloque': {'type': 'string', 'enum': ['10-13','14-18']}},
-            'required': ['fecha','bloque'],
-        }},
-        responses=DireccionAsignadaSerializer,
-    )
-    @action(detail=True, methods=["post"], url_path="reagendar")
-    def reagendar(self, request, pk=None):
-        obj = self.get_object()
-        u = request.user
-        if getattr(u, "rol", None) == "tecnico" and obj.asignado_a_id != u.id:
-            return Response({"detail": "Solo el técnico asignado o administrador puede reagendar."}, status=403)
-
-        fecha_str = (request.data.get("fecha") or "").strip()
-        bloque = (request.data.get("bloque") or "").strip()
-
-        if not fecha_str or not bloque:
-            return Response({"detail": "Debe enviar fecha (YYYY-MM-DD) y bloque (10-13/14-18)."}, status=400)
-
-        fecha = parse_date(fecha_str)
-        if not fecha:
-            return Response({"detail": "Formato de fecha inválido. Use YYYY-MM-DD."}, status=400)
-        if bloque not in ("10-13", "14-18"):
-            return Response({"detail": "Bloque inválido. Use 10-13 o 14-18."}, status=400)
-
-        obj.reagendado_fecha = fecha
-        obj.reagendado_bloque = bloque
-        obj.estado = EstadoAsignacion.REAGENDADA
-        obj.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
-
-        return Response(DireccionAsignadaSerializer(obj).data)
-
-    @extend_schema(
-        summary="Cerrar visita sin auditoría",
-        request={'application/json': {'type': 'object', 'properties': {'motivo': {'type': 'string', 'enum': ['sin_moradores','rechaza','contingencia','masivo']}}, 'required': ['motivo']}},
-        responses=DireccionAsignadaSerializer,
-    )
-    @action(detail=True, methods=["post"], url_path="cerrar")
-    def cerrar(self, request, pk=None):
-        obj = self.get_object()
-        u = request.user
-        if getattr(u, "rol", None) == "tecnico" and obj.asignado_a_id != u.id:
-            return Response({"detail": "No autorizado."}, status=403)
-
-        motivo = (request.data.get("motivo") or "").strip()
-        if motivo not in ("sin_moradores", "rechaza", "contingencia", "masivo"):
-            return Response({"detail": "motivo inválido."}, status=400)
-
-        obj.estado = EstadoAsignacion.VISITADA
-        obj.save(update_fields=["estado", "updated_at"])
-        return Response(DireccionAsignadaSerializer(obj).data)
-
-    @extend_schema(summary="Mis direcciones (técnico)", responses=DireccionAsignadaListaSerializer)
-    @action(detail=False, methods=["get"], url_path="mias")
-    def mias(self, request):
-        u = request.user
-        if getattr(u, "rol", None) != "tecnico":
-            return Response({"detail": "Solo técnicos."}, status=403)
-        qs = self.get_queryset().filter(asignado_a=u)
-        page = self.paginate_queryset(qs)
-        if page is not None:
-            return self.get_paginated_response(self.get_serializer(page, many=True).data)
-        return Response(self.get_serializer(qs, many=True).data)
-
-    @extend_schema(
-        summary="Direcciones disponibles para asignarme (técnico)",
-        parameters=[
-            OpenApiParameter("zona", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("comuna", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("marca", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("tecnologia", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("desde", OpenApiTypes.DATE, OpenApiParameter.QUERY, description="fecha mínima"),
-            OpenApiParameter("hasta", OpenApiTypes.DATE, OpenApiParameter.QUERY, description="fecha máxima"),
-            OpenApiParameter("search", OpenApiTypes.STR, OpenApiParameter.QUERY),
-        ],
-        responses=DireccionAsignadaListaSerializer,
-    )
-    @action(detail=False, methods=["get"], url_path="disponibles")
-    def disponibles(self, request):
-        u = request.user
-        if getattr(u, "rol", None) != "tecnico":
-            return Response({"detail": "Solo técnicos."}, status=403)
-
-        qs = self.get_queryset().filter(asignado_a__isnull=True, estado=EstadoAsignacion.PENDIENTE)
-
-        zona   = (request.query_params.get("zona") or "").strip().upper()
-        comuna = (request.query_params.get("comuna") or "").strip()
-        marca  = (request.query_params.get("marca") or "").strip().upper()
-        tec    = (request.query_params.get("tecnologia") or "").strip().upper()
-        s      = (request.query_params.get("search") or "").strip()
-
-        if zona:   qs = qs.filter(zona=zona)
-        if comuna: qs = qs.filter(comuna__icontains=comuna)
-        if marca:  qs = qs.filter(marca=marca)
-        if tec:    qs = qs.filter(tecnologia=tec)
-
-        desde = parse_date(request.query_params.get("desde") or "")
-        hasta = parse_date(request.query_params.get("hasta") or "")
-        if desde: qs = qs.filter(fecha__gte=desde)
-        if hasta: qs = qs.filter(fecha__lte=hasta)
-
-        if s:
-            qs = qs.filter(
-                Q(direccion__icontains=s) |
-                Q(comuna__icontains=s) |
-                Q(rut_cliente__icontains=s) |
-                Q(id_vivienda__icontains=s)
-            )
-
-        qs = qs.order_by("fecha", "comuna", "direccion")
-
-        page = self.paginate_queryset(qs)
-        if page is not None:
-            return self.get_paginated_response(self.get_serializer(page, many=True).data)
-        return Response(self.get_serializer(qs, many=True).data)
-
-    @extend_schema(
-        summary="Tablero del técnico: mías + disponibles",
-        parameters=[
-            OpenApiParameter("zona", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("comuna", OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter("search", OpenApiTypes.STR, OpenApiParameter.QUERY),
-        ],
-        responses={200: {"type": "object"}},
-    )
-    @action(detail=False, methods=["get"], url_path="tablero")
-    def tablero(self, request):
-        u = request.user
-        if getattr(u, "rol", None) != "tecnico":
-            return Response({"detail": "Solo técnicos."}, status=403)
-
-        zona   = (request.query_params.get("zona") or "").strip().upper()
-        comuna = (request.query_params.get("comuna") or "").strip()
-        s      = (request.query_params.get("search") or "").strip()
-
-        mias = self.get_queryset().filter(asignado_a=u).order_by("fecha", "comuna", "direccion")
-        if zona:   mias = mias.filter(zona=zona)
-        if comuna: mias = mias.filter(comuna__icontains=comuna)
-        if s:
-            mias = mias.filter(Q(direccion__icontains=s) | Q(comuna__icontains=s))
-
-        disp = self.get_queryset().filter(asignado_a__isnull=True, estado=EstadoAsignacion.PENDIENTE).order_by("fecha", "comuna", "direccion")
-        if zona:   disp = disp.filter(zona=zona)
-        if comuna: disp = disp.filter(comuna__icontains=comuna)
-        if s:
-            disp = disp.filter(Q(direccion__icontains=s) | Q(comuna__icontains=s))
-
-        return Response({
-            "mias": DireccionAsignadaListaSerializer(mias[:100], many=True, context={"request": request}).data,
-            "disponibles": DireccionAsignadaListaSerializer(disp[:100], many=True, context={"request": request}).data,
-        })
+        if getattr(request.user, "rol", None) != "administrador":
+            return Response({"detail": "Solo administrador puede desasignar."}, status=403)
+        obj.asignado_a = None
+        obj.estado = "PENDIENTE"
+        obj.save()
+        HistorialAsignacion.objects.create(
+            asignacion=obj,
+            accion="asignacion_eliminada",
+            detalles="Desasignada por administrador.",
+            usuario=request.user,
+        )
+        return Response(self.get_serializer(obj).data)
