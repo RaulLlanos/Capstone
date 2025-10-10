@@ -8,7 +8,7 @@ from django.db.models import Case, When, Value, IntegerField, Q
 from django.utils import timezone
 
 from openpyxl import load_workbook
-from rest_framework import viewsets
+from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -25,7 +25,12 @@ from .serializers import (
     HistorialAsignacionSerializer,
     CsvRowResult,
     CargaCSVSerializer,
+    EstadoClienteActionSerializer,   # ⬅️ nuevo
 )
+
+# ➕ para la nueva acción
+from auditoria.models import AuditoriaVisita
+from .models import EstadoAsignacion, BloqueHorario
 
 # ---------- Helpers para importar archivos ----------
 
@@ -179,6 +184,14 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     filterset_fields = ["estado", "comuna", "zona", "marca", "tecnologia", "encuesta", "asignado_a"]
     search_fields = ["direccion", "comuna", "rut_cliente", "id_vivienda"]
     ordering_fields = ["fecha", "created_at"]
+
+    # 👇 Para que el Browsable API muestre el formulario correcto en la acción
+    def get_serializer_class(self):
+        if getattr(self, "action", None) == "cargar_csv":
+            return CargaCSVSerializer
+        if getattr(self, "action", None) == "estado_cliente":
+            return EstadoClienteActionSerializer
+        return super().get_serializer_class()
 
     def get_queryset(self):
         u = self.request.user
@@ -362,6 +375,96 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                 "errors":  sum(1 for r in results if r.get("errors")),
             }
         })
+
+    # ✅ NUEVA ACCIÓN: técnico marca el estado del cliente en una visita asignada
+    @extend_schema(
+        request=EstadoClienteActionSerializer,
+        responses={200: DireccionAsignadaSerializer}
+    )
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="estado_cliente",
+        serializer_class=EstadoClienteActionSerializer,  # fuerza el formulario correcto en Browsable API
+    )
+    def estado_cliente(self, request, pk=None):
+        user = request.user
+        if getattr(user, "rol", None) != "tecnico":
+            return Response({"detail": "Solo técnicos pueden usar esta acción."}, status=status.HTTP_403_FORBIDDEN)
+
+        asignacion = self.get_object()
+        if asignacion.asignado_a_id != user.id:
+            return Response({"detail": "Esta dirección no está asignada a tu usuario."}, status=status.HTTP_403_FORBIDDEN)
+
+        # Valida payload con serializer (aparece como formulario en Browsable API)
+        payload = self.get_serializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        data = payload.validated_data
+
+        estado = data["estado_cliente"]
+        reagendado_fecha = data.get("reagendado_fecha")
+        reagendado_bloque = data.get("reagendado_bloque")
+        ont_modem_ok = data.get("ont_modem_ok", None)
+        servicios = data.get("servicios") or []
+        categorias = data.get("categorias") or {}
+        descripcion_problema = data.get("descripcion_problema") or ""
+        fotos = data.get("fotos") or []
+
+        # Validación específica para reagendo
+        if estado == "reagendo":
+            if not reagendado_fecha or not reagendado_bloque:
+                return Response({"detail": "Debe indicar reagendado_fecha y reagendado_bloque."}, status=400)
+            if reagendado_fecha < timezone.localdate():
+                return Response({"detail": "La fecha reagendada no puede ser pasada."}, status=400)
+
+        # Crear auditoría como traza formal
+        audit = AuditoriaVisita.objects.create(
+            asignacion=asignacion,
+            tecnico=user,
+            estado_cliente=estado,
+            reagendado_fecha=reagendado_fecha,
+            reagendado_bloque=reagendado_bloque,
+            ont_modem_ok=ont_modem_ok,
+            servicios=servicios,
+            categorias=categorias,
+            descripcion_problema=descripcion_problema,
+            fotos=fotos,
+        )
+
+        # Efectos sobre la asignación + historial (mapeo a estado de asignación)
+        if estado == "reagendo":
+            asignacion.reagendado_fecha = audit.reagendado_fecha
+            asignacion.reagendado_bloque = audit.reagendado_bloque
+            asignacion.estado = EstadoAsignacion.REAGENDADA
+            asignacion.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
+            HistorialAsignacion.objects.create(
+                asignacion=asignacion,
+                accion=HistorialAsignacion.Accion.REAGENDADA,
+                detalles=f"Reagendada por técnico a {audit.reagendado_fecha} {audit.reagendado_bloque}",
+                usuario=user,
+            )
+        elif estado == "autoriza":
+            asignacion.estado = EstadoAsignacion.VISITADA
+            asignacion.save(update_fields=["estado", "updated_at"])
+            HistorialAsignacion.objects.create(
+                asignacion=asignacion,
+                accion=HistorialAsignacion.Accion.AUDITORIA_CREADA,
+                detalles="Auditoría con estado 'autoriza' (asignación VISITADA).",
+                usuario=user,
+            )
+        else:
+            # sin_moradores / rechaza / contingencia / masivo → CANCELADA
+            asignacion.estado = EstadoAsignacion.CANCELADA
+            asignacion.save(update_fields=["estado", "updated_at"])
+            HistorialAsignacion.objects.create(
+                asignacion=asignacion,
+                accion=HistorialAsignacion.Accion.ESTADO_CLIENTE,
+                detalles=f"Estado cliente = {estado} (asignación CANCELADA).",
+                usuario=user,
+            )
+
+        # Respuesta: asignación (para refrescar la tarjeta en el front)
+        return Response(DireccionAsignadaSerializer(asignacion).data, status=200)
 
     @action(detail=True, methods=["patch"], url_path="desasignar")
     def desasignar(self, request, pk=None):
