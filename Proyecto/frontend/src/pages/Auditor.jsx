@@ -33,7 +33,7 @@ function getEffectiveDate(it) {
 }
 
 function isCompletada(it) {
-  return String(it.estado || "").toUpperCase() === "s" || String(it.estado || "").toUpperCase() === "VISITADA";
+  return String(it.estado || "").toUpperCase() === "visitada" || String(it.estado || "").toUpperCase() === "VISITADA";
 }
 
 function ymdToDmy(s) {
