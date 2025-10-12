@@ -48,7 +48,7 @@ const ENCUESTAS = [
 ];
 
 // Intentaremos ambos endpoints según cómo esté registrado el router:
-const CANDIDATE_ENDPOINTS = ["/api/direcciones/", "/api/asignaciones/"];
+const CANDIDATE_ENDPOINTS = ["/api/asignaciones/"];
 
 export default function AuditorDireccionAdd() {
   const { user } = useAuth();

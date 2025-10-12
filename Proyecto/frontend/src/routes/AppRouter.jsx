@@ -14,6 +14,7 @@ import AuditorDireccionEdit from "../pages/AuditorDireccionEdit";
 import TecnicoReagendar from "../pages/TecnicoReagendar"
 import TecnicoAuditoriaAdd from "../pages/TecnicoAuditoriaAdd";
 import TecnicoAuditoriaVer from "../pages/TecnicoAuditoriaVer";
+import TecnicoCompletadas from "../pages/TecnicoCompletadas";
 
 /** Guard 1: autenticación básica */
 function RequireAuth() {
@@ -51,7 +52,7 @@ function RedirectByRole() {
   if (initializing) return null;
   if (!user) return <Navigate to="/login" replace />;
 
-  return user.role === "auditor"
+  return user.role === "administrador"
     ? <Navigate to="/auditor" replace />
     : <Navigate to="/tecnico" replace />;
 }
@@ -94,7 +95,7 @@ function AppShell() {
           <Route index element={<RedirectByRole />} />
 
           {/* AUDITOR */}
-          <Route element={<RequireRole allowed={["auditor"]} />}>
+          <Route element={<RequireRole allowed={["administrador"]} />}>
             <Route path="/auditor" element={<AuditorDashboard />} />
             <Route path="/registro" element={<Registro />} />
             <Route path="/auditor/direcciones/nueva" element={<AuditorDireccionAdd />} />
@@ -109,6 +110,7 @@ function AppShell() {
             <Route path="/tecnico/reagendar/:id" element={<TecnicoReagendar />} />
             <Route path="/tecnico/auditoria/nueva/:id" element={<TecnicoAuditoriaAdd />} />
             <Route path="/tecnico/auditoria/ver/:id" element={<TecnicoAuditoriaVer />} />
+            <Route path="/tecnico/completadas" element={<TecnicoCompletadas />} />
           </Route>
         </Route>
 

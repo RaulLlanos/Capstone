@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 // src/pages/Tecnico.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -17,7 +18,7 @@ function normalizeList(data) {
   return [];
 }
 
-// yyyy-mm-dd local
+// yyyy-mm-dd local (sin timezone)
 function todayLocalYMD() {
   const d = new Date();
   const y = d.getFullYear();
@@ -26,9 +27,16 @@ function todayLocalYMD() {
   return `${y}-${m}-${day}`;
 }
 
-const isCompletada = (it) => String(it.estado || "").toUpperCase() === "COMPLETADA";
+// DD/MM/YYYY (seguro con timezone)
+function ymdToDmy(s) {
+  if (!s) return "—";
+  const ymd = String(s).slice(0, 10);
+  const [y, m, d] = ymd.split("-");
+  if (!y || !m || !d) return "—";
+  return `${d.padStart(2, "0")}/${m.padStart(2, "0")}/${y}`;
+}
 
-// --- NUEVO: helpers de “fecha/bloque efectivos” ---
+// === FECHA/BLOQUE EFECTIVOS (usa SIEMPRE esto) ===
 function getEffectiveDate(it) {
   const r =
     it.reagendado_fecha ||
@@ -46,23 +54,29 @@ function getEffectiveBlock(it) {
   return String(r || "");
 }
 function isReagendado(it) {
-  const hasDate =
+  return Boolean(
     it.reagendado_fecha ||
-    (it.reagendado && (it.reagendado.fecha || it.reagendado.reagendado_fecha)) ||
-    it.reagendadoFecha ||
-    it.reagendado_date;
-  const hasBlock =
-    it.reagendado_bloque ||
-    (it.reagendado && (it.reagendado.bloque || it.reagendado.reagendado_bloque)) ||
-    it.reagendadoBloque ||
-    it.reagendado_block;
-  return Boolean(hasDate || hasBlock || String(it.estado).toUpperCase() === "REAGENDADA");
+      it.reagendado_bloque ||
+      (it.reagendado && (it.reagendado.fecha || it.reagendado.bloque)) ||
+      it.reagendadoFecha ||
+      it.reagendadoBloque ||
+      it.reagendado_date ||
+      it.reagendado_block ||
+      String(it.estado || "").toUpperCase() === "REAGENDADA"
+  );
 }
+function showReagendadoBadge(it) {
+  const eff = getEffectiveDate(it).slice(0, 10);
+  const hasReagendado = isReagendado(it);
+  if (!hasReagendado) return false;
+  // si la fecha efectiva ES hoy, no mostramos badge
+  return eff !== todayLocalYMD();
+}
+const isCompletada = (it) => String(it.estado || "").toUpperCase() === "VISITADA";
 
 // asignación pertenece al usuario
 function isMine(item, user) {
   if (!user) return false;
-
   const myId = user.id ?? null;
   const myEmail = user.email ?? null;
 
@@ -89,19 +103,8 @@ function isMine(item, user) {
 
   const emailMatch = myEmail && (tecnicoEmail && tecnicoEmail === String(myEmail).toLowerCase());
   const idMatch = myId != null && (tecnicoId === myId || asignadoId === myId);
-
   return Boolean(emailMatch || idMatch);
 }
-
-  // Convierte "YYYY-MM-DD" (o "YYYY-MM-DDTHH:mm") a "DD/MM/YYYY"
-  function ymdToDmy(s) {
-    if (!s) return "—";
-    const ymd = String(s).slice(0, 10); // por si viene con hora
-    const [y, m, d] = ymd.split("-");
-    if (!y || !m || !d) return s;
-    return `${d.padStart(2,"0")}/${m.padStart(2,"0")}/${y}`;
-  }
-
 
 export default function Tecnico() {
   const { user } = useAuth();
@@ -115,13 +118,15 @@ export default function Tecnico() {
 
   const [q, setQ] = useState("");
   const [filtro, setFiltro] = useState({
-    estado: "", // todas
+    estado: "",
     tecnologia: "",
     marca: "",
     zona: "",
   });
 
   const fetchId = useRef(0);
+  const hoyYMD = todayLocalYMD();
+  const hoyDMY = ymdToDmy(hoyYMD);
 
   const load = async () => {
     setLoading(true);
@@ -144,25 +149,24 @@ export default function Tecnico() {
     load();
   }, []);
 
-  // Hidratación: si la lista trae "reagendado" sin fecha, pedimos el detalle
+  // Hidratar detalles si el listado indica reagendado pero no trae reagendado_* (evita perder "hoy" tras F5)
   useEffect(() => {
-    // candidatos: marcados como reagendados pero sin fecha efectiva
-    const needDetail = items
-      .filter((it) => isReagendado(it))
+    const needDetail = (items || [])
       .filter((it) => {
-        const hasDate =
+        const flagged = isReagendado(it);
+        if (!flagged) return false;
+        const hasEffDate =
           it.reagendado_fecha ||
           (it.reagendado && (it.reagendado.fecha || it.reagendado.reagendado_fecha)) ||
           it.reagendadoFecha ||
           it.reagendado_date;
-        return !hasDate; // faltante
+        return !hasEffDate;
       })
-      .slice(0, 10); // límite de cortesía para no sobrecargar (ajusta si quieres)
+      .slice(0, 10);
 
     if (!needDetail.length) return;
 
-    let isCancelled = false;
-
+    let cancelled = false;
     (async () => {
       try {
         const results = await Promise.allSettled(
@@ -173,23 +177,18 @@ export default function Tecnico() {
             .filter((r) => r.status === "fulfilled")
             .map((r) => [r.value.data.id, r.value.data])
         );
-        if (isCancelled || byId.size === 0) return;
+        if (cancelled || byId.size === 0) return;
 
-        // fusionamos en memoria: prioridad a datos del detalle
-        setItems((prev) =>
-          prev.map((it) => (byId.has(it.id) ? { ...it, ...byId.get(it.id) } : it))
-        );
-      } catch (e) {
-        // silencioso; no interrumpe la UI
-        console.warn("No se pudo hidratar detalles de reagendado:", e);
+        setItems((prev) => prev.map((it) => (byId.has(it.id) ? { ...it, ...byId.get(it.id) } : it)));
+      } catch (_) {
+        // silencioso
       }
     })();
 
     return () => {
-      isCancelled = true;
+      cancelled = true;
     };
   }, [items]);
-
 
   // flash (por ejemplo, luego de reagendar)
   useEffect(() => {
@@ -208,6 +207,7 @@ export default function Tecnico() {
 
     return items
       .filter((it) => isMine(it, user))
+      .filter((it) => !isCompletada(it)) 
       .filter((it) => {
         if (filtro.estado && String(it.estado || "").toUpperCase() !== filtro.estado) return false;
         if (filtro.tecnologia && String(it.tecnologia || "") !== filtro.tecnologia) return false;
@@ -231,32 +231,67 @@ export default function Tecnico() {
           .toLowerCase();
         return bag.includes(text);
       })
-      // ordenar por fecha efectiva
+      // ordenar por fecha EFECTIVA
       .sort((a, b) => getEffectiveDate(a).localeCompare(getEffectiveDate(b)));
   }, [items, user, q, filtro]);
 
   // hoy con fecha EFECTIVA
-  const hoyYMD = todayLocalYMD();
-  const hoyDMY = ymdToDmy(hoyYMD);
   const visitasDeHoy = useMemo(
     () => misVisitas.filter((it) => getEffectiveDate(it).slice(0, 10) === hoyYMD),
     [misVisitas, hoyYMD]
   );
 
+  // todas excepto las de HOY (para que "se muevan" visualmente)
+  const todasExceptoHoy = useMemo(
+    () => misVisitas.filter((it) => getEffectiveDate(it).slice(0, 10) !== hoyYMD),
+    [misVisitas, hoyYMD]
+  );
+
+  // Ir a reagendamiento
   const goReagendar = (id) => navigate(`/tecnico/reagendar/${id}`);
 
   // UI: fecha/bloque a mostrar
   const renderFechaInfo = (it) => {
-    const effDate = getEffectiveDate(it);     // ya lo tienes
-    const effBlock = getEffectiveBlock(it);   // ya lo tienes
-    const estado = String(it.estado || "").toUpperCase();
-    const base = effDate ? ymdToDmy(effDate) : "—";  // <- aquí el cambio
-    const parts = [base];
+    const effDate = getEffectiveDate(it);
+    const effBlock = getEffectiveBlock(it);
+    const parts = [effDate ? ymdToDmy(effDate) : "—"];
     if (effBlock) parts.push(effBlock);
-    parts.push(estado);
     return parts.join(" · ");
   };
 
+  // Botón: Para hoy (reagenda a hoy con bloque por defecto; ajusta si quieres preguntar el bloque)
+  const setParaHoy = async (item, bloque = "10-13") => {
+    try {
+      await api.get("/auth/csrf").catch(() => {});
+      await api.post(`/api/asignaciones/${item.id}/reagendar/`, {
+        fecha: hoyYMD,
+        bloque,
+      });
+
+      // Optimista: reflejar en memoria la nueva fecha efectiva (sin marcar badge)
+      setItems((prev) =>
+        prev.map((it) =>
+          it.id === item.id
+            ? {
+                ...it,
+                estado: "REAGENDADA", 
+                reagendado_fecha: hoyYMD,
+                reagendado_bloque: bloque,
+              }
+            : it
+        )
+      );
+      setFlash("Asignación movida a HOY.");
+    } catch (err) {
+      console.error("Reagendar a hoy falló:", err?.response?.status, err?.response?.data);
+      const data = err?.response?.data || {};
+      const msg =
+        data.detail ||
+        data.error ||
+        "No se pudo mover a hoy. (El backend requiere fecha y bloque válidos).";
+      setError(msg);
+    }
+  };
 
   return (
     <div className={styles.wrapper}>
@@ -280,19 +315,6 @@ export default function Tecnico() {
             disabled={loading}
           />
 
-          <select
-            className={styles.select}
-            value={filtro.estado}
-            onChange={(e) => setFiltro((f) => ({ ...f, estado: e.target.value }))}
-            disabled={loading}
-          >
-            <option value="">Todos los estados</option>
-            {ESTADOS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
 
           <select
             className={styles.select}
@@ -342,9 +364,7 @@ export default function Tecnico() {
 
         {/* Visitas de hoy (por fecha efectiva) */}
         <section style={{ marginTop: 16 }}>
-          <h2 className={styles.sectionTitle}>
-            Visitas de hoy ({hoyDMY})
-          </h2>
+          <h2 className={styles.sectionTitle}>Visitas de hoy ({hoyDMY})</h2>
 
           <div className={styles.listGrid}>
             {visitasDeHoy.map((it) => (
@@ -362,13 +382,13 @@ export default function Tecnico() {
                 </div>
 
                 <div className={styles.actions}>
-                  {isReagendado(it) && <span className={`${styles.badge} ${styles.badgeReagendado}`}>Reagendado</span>}
+                  {/* NO badge si es para HOY */}
                   <button
                     className={styles.button}
                     onClick={() =>
                       navigate(
                         isCompletada(it)
-                          ? `/tecnico/auditoria/ver/${it.id}`     // vista solo lectura (por asignación)
+                          ? `/tecnico/auditoria/ver/${it.id}`     // vista solo lectura
                           : `/tecnico/auditoria/nueva/${it.id}`   // crear auditoría
                       )
                     }
@@ -388,12 +408,12 @@ export default function Tecnico() {
           </div>
         </section>
 
-        {/* Todas mis visitas (con fecha/bloque efectivos) */}
+        {/* Todas mis visitas (ocultando las de HOY) */}
         <section style={{ marginTop: 20 }}>
           <h2 className={styles.sectionTitle}>Todas mis visitas</h2>
 
           <div className={styles.listGrid}>
-            {misVisitas.map((it) => (
+            {todasExceptoHoy.map((it) => (
               <div key={`todas-${it.id}`} className={styles.cardItem}>
                 <div className={styles.cardItemTop}>
                   <strong>{it.direccion}</strong>
@@ -408,9 +428,23 @@ export default function Tecnico() {
                 </div>
 
                 <div className={styles.actions}>
-                  {isReagendado(it) && <span className={`${styles.badge} ${styles.badgeReagendado}`}>Reagendado</span>}
-                  <button className={styles.button} onClick={() => navigate(`/tecnico/auditoria/nueva/${it.id}`)}>
-                    Auditar
+                  {showReagendadoBadge(it) && (
+                    <span className={`${styles.badge} ${styles.badgeReagendado}`}>Reagendado</span>
+                  )}
+                  <button
+                    className={styles.button}
+                    onClick={() =>
+                      navigate(
+                        isCompletada(it)
+                          ? `/tecnico/auditoria/ver/${it.id}`
+                          : `/tecnico/auditoria/nueva/${it.id}`
+                      )
+                    }
+                  >
+                    {isCompletada(it) ? "Ver auditoría" : "Auditar"}
+                  </button>
+                  <button className={styles.button} onClick={() => setParaHoy(it)}>
+                    Para hoy
                   </button>
                   <button className={styles.button} onClick={() => goReagendar(it.id)}>
                     Reagendar
@@ -419,8 +453,8 @@ export default function Tecnico() {
               </div>
             ))}
 
-            {!loading && misVisitas.length === 0 && (
-              <div className={styles.helper}>No tienes visitas asignadas.</div>
+            {!loading && todasExceptoHoy.length === 0 && (
+              <div className={styles.helper}>No tienes más visitas fuera de hoy.</div>
             )}
           </div>
         </section>

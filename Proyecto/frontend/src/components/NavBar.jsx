@@ -23,22 +23,25 @@ export default function NavBar() {
   const displayName = (user?.name || user?.email || "Usuario").trim();
   const initial = (displayName[0] || "?").toUpperCase();
   const role = String(user?.role || user?.rol || "").toLowerCase();
-  const isAuditor = role === "auditor";
+  const isAdmin = role === "administrador";
   const isTecnico = role === "tecnico";
-  const roleLabel = isAuditor ? "Auditor" : isTecnico ? "Técnico" : "Usuario";
+  const roleLabel = isAdmin ? "Administrador" : isTecnico ? "Técnico" : "Usuario";
 
   const links = useMemo(() => {
     if (!user) return [];
-    if (isAuditor) {
+    if (isAdmin) {
       return [
         { to: "/auditor/direcciones", label: "Direcciones" },
         { to: "/auditor/direcciones/nueva", label: "Añadir dirección" },
         { to: "/registro", label: "Crear usuario" },
       ];
     }
-    if (isTecnico) return [{ to: "/tecnico/direcciones", label: "Direcciones" }];
+    if (isTecnico) return [
+      { to: "/tecnico/direcciones", label: "Direcciones" },
+      { to: "/tecnico/completadas", label: "Visitadas" }
+    ];
     return [];
-  }, [user, isAuditor, isTecnico]);
+  }, [user, isAdmin, isTecnico]);
 
   // Si hay que ocultar, renderiza nada (pero los hooks ya se llamaron todos)
   if (hide) return null;
@@ -74,7 +77,7 @@ export default function NavBar() {
               <div className={styles.avatar}>{initial}</div>
               <div className={styles.userInfo}>
                 <div className={styles.userName}>{displayName}</div>
-                <div className={`${styles.role} ${isAuditor ? styles.roleAuditor : styles.roleTecnico}`}>
+                <div className={`${styles.role} ${isAdmin ? styles.roleAuditor : styles.roleTecnico}`}>
                   {roleLabel}
                 </div>
               </div>
