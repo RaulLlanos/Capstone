@@ -48,7 +48,14 @@ class DireccionAsignadaAdmin(admin.ModelAdmin):
         }),
         ("Metadatos", {"fields": ("created_at", "updated_at")}),
     )
-    readonly_fields = ("created_at", "updated_at", "zona")  # zona calculada
+    readonly_fields = ("created_at", "updated_at", "zona")
+
+    # NUEVO: si el usuario no es administrador, no puede editar asignado_a/estado en admin
+    def get_readonly_fields(self, request, obj=None):
+        ro = list(self.readonly_fields)
+        if getattr(request.user, "rol", None) != "administrador":
+            ro += ["asignado_a", "estado"]
+        return ro
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "asignado_a":
@@ -68,9 +75,6 @@ class DireccionAsignadaAdmin(admin.ModelAdmin):
                 raise ValidationError({"comuna": "Comuna no válida para Santiago."})
 
         creating = obj.pk is None
-        prev_asignado = None
-        if not creating:
-            prev_asignado = DireccionAsignada.objects.get(pk=obj.pk).asignado_a_id
 
         super().save_model(request, obj, form, change)
 

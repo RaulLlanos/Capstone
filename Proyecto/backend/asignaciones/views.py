@@ -1,14 +1,18 @@
+# asignaciones/views.py
 from datetime import datetime
 import csv
 import io
 import re
 from typing import List, Dict, Any
 
-from django.db.models import Case, When, Value, IntegerField, Q
+from django.db import transaction
+from django.db.models import Case, When, Value, IntegerField, Q, Count
+from django.db.models.functions import TruncDate
+from django.http import HttpResponse
 from django.utils import timezone
 
-from openpyxl import load_workbook
-from rest_framework import viewsets, status
+from openpyxl import load_workbook, Workbook
+from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -25,18 +29,16 @@ from .serializers import (
     HistorialAsignacionSerializer,
     CsvRowResult,
     CargaCSVSerializer,
-    EstadoClienteActionSerializer,   # ⬅️ nuevo
 )
 
-# ➕ para la nueva acción
-from auditoria.models import AuditoriaVisita
-from .models import EstadoAsignacion, BloqueHorario
+# === Notificaciones (registro + envío real por email) ===
+from core.models import Notificacion
+from core.notify import enviar_notificacion_real
 
 # ---------- Helpers para importar archivos ----------
 
 _HEADER_ALIASES = {
     "rut_cliente": ["rut_cliente", "rut", "rut cliente"],
-    # 🔧 priorizamos los nombres que usa Claro
     "id_vivienda": [
         "id_vivienda_cliente", "id_vivienda", "pcs_cliente",
         "customer_id", "customerid"
@@ -47,7 +49,6 @@ _HEADER_ALIASES = {
         "direccion_destinatario", "direccion_cliente_del_destinatario"
     ],
     "comuna": [
-        # 🔧 primero comuna_cliente (en tu archivo tiene datos; la columna "comuna" está vacía)
         "comuna_cliente", "comuna", "comuna del cliente", "comuna_del_cliente"
     ],
     "marca": ["marca", "brand"],
@@ -72,7 +73,6 @@ def _norm(s: str) -> str:
     return s
 
 def _s(val) -> str:
-    """string seguro con strip(), manejando ints/None."""
     if val is None:
         return ""
     try:
@@ -94,7 +94,6 @@ def _build_header_map(raw_headers: List[str]) -> Dict[str, str]:
 def _parse_date(val):
     if not val:
         return None
-    # Si viene ya como datetime/date desde openpyxl
     if hasattr(val, "year"):
         try:
             return val.date() if hasattr(val, "date") else val
@@ -121,7 +120,6 @@ def _normalize_bloque(val: str) -> str | None:
     return None
 
 def _header_score(names_norm: List[str]) -> int:
-    """Heurística para detectar la fila de encabezados en XLSX."""
     score = 0
     have = set(names_norm)
     def any_alias(key):
@@ -141,12 +139,10 @@ def _rows_from_csv(f) -> List[Dict[str, Any]]:
 def _rows_from_xlsx(f) -> List[Dict[str, Any]]:
     wb = load_workbook(filename=io.BytesIO(f.read()), data_only=True)
     ws = wb.worksheets[0]
-
     all_rows = list(ws.iter_rows(values_only=True))
     if not all_rows:
         return []
 
-    # intenta detectar la fila de headers (primeras 10 filas)
     header_idx = 0
     for i in range(min(10, len(all_rows))):
         names = [ _s(x) for x in (all_rows[i] or []) ]
@@ -159,7 +155,7 @@ def _rows_from_xlsx(f) -> List[Dict[str, Any]]:
 
     rows = []
     for raw in all_rows[header_idx+1:]:
-        if not any(raw):  # fila completamente vacía
+        if not any(raw):
             continue
         r = { headers[i]: (raw[i] if i < len(raw) else None) for i in range(len(headers)) }
         rows.append((header_map, r))
@@ -171,11 +167,10 @@ def _canon_get(row: Dict[str, Any], header_map: Dict[str, str], key: str) -> Any
 
 # ---------------------------------------------------
 
-
 class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     """
-    - Administrador: CRUD total + carga CSV/XLSX + reasignar/desasignar
-    - Técnico: lectura + acciones (asignarme, estado_cliente, reagendar, cerrar)
+    - Administrador: CRUD total + carga CSV/XLSX + reasignar/desasignar.
+    - Técnico: lectura + acción POST /estado_cliente/.
     """
     queryset = DireccionAsignada.objects.all().order_by("-created_at")
     serializer_class = DireccionAsignadaSerializer
@@ -184,14 +179,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     filterset_fields = ["estado", "comuna", "zona", "marca", "tecnologia", "encuesta", "asignado_a"]
     search_fields = ["direccion", "comuna", "rut_cliente", "id_vivienda"]
     ordering_fields = ["fecha", "created_at"]
-
-    # 👇 Para que el Browsable API muestre el formulario correcto en la acción
-    def get_serializer_class(self):
-        if getattr(self, "action", None) == "cargar_csv":
-            return CargaCSVSerializer
-        if getattr(self, "action", None) == "estado_cliente":
-            return EstadoClienteActionSerializer
-        return super().get_serializer_class()
 
     def get_queryset(self):
         u = self.request.user
@@ -219,41 +206,118 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
         return qs
 
-    @action(detail=False, methods=["get"], url_path="historial")
-    def historial(self, request):
+    # ---------- helper: mismo filtro de historial para listar/exportar ----------
+    def _historial_filtered_qs(self, request):
         u = request.user
         tecnico_id = request.query_params.get("tecnico_id")
         qs = HistorialAsignacion.objects.select_related("asignacion", "usuario").all()
 
         if getattr(u, "rol", None) == "tecnico":
             qs = qs.filter(Q(usuario_id=u.id) | Q(asignacion__asignado_a_id=u.id))
-        else:
-            if tecnico_id:
-                qs = qs.filter(Q(usuario_id=tecnico_id) | Q(asignacion__asignado_a_id=tecnico_id))
+        elif tecnico_id:
+            qs = qs.filter(Q(usuario_id=tecnico_id) | Q(asignacion__asignado_a_id=tecnico_id))
 
-        qs = qs.order_by("-created_at", "-id")
+        # Filtros de campos de asignación
+        p = request.query_params
+        if p.get("estado"): qs = qs.filter(asignacion__estado=p["estado"])
+        if p.get("marca"): qs = qs.filter(asignacion__marca=p["marca"])
+        if p.get("tecnologia"): qs = qs.filter(asignacion__tecnologia=p["tecnologia"])
+        if p.get("comuna"): qs = qs.filter(asignacion__comuna=p["comuna"])
+        if p.get("zona"): qs = qs.filter(asignacion__zona=p["zona"])
+        if p.get("encuesta"): qs = qs.filter(asignacion__encuesta=p["encuesta"])
+
+        # Rango por fecha de asignación (alias desde/hasta y HOY)
+        desde = p.get("fecha_after") or p.get("desde")
+        hasta = p.get("fecha_before") or p.get("hasta")
+        hoy = timezone.localdate().isoformat()
+        if desde and str(desde).upper() == "HOY": desde = hoy
+        if hasta and str(hasta).upper() == "HOY": hasta = hoy
+        if desde: qs = qs.filter(asignacion__fecha__gte=desde)
+        if hasta: qs = qs.filter(asignacion__fecha__lte=hasta)
+
+        return qs
+
+    # ---------- HISTORIAL (lista) ----------
+    @action(detail=False, methods=["get"], url_path="historial")
+    def historial(self, request):
+        qs = self._historial_filtered_qs(request).order_by("-created_at", "-id")
         page = self.paginate_queryset(qs)
         s = HistorialAsignacionSerializer(page or qs, many=True)
         return self.get_paginated_response(s.data) if page is not None else Response(s.data)
 
-    # === CARGA CSV/XLSX semanal ===
-    @extend_schema(request=CargaCSVSerializer)  # para que en /docs aparezca el input "file"
+    # ---------- HISTORIAL: EXPORT (CSV/XLSX, solo admin) ----------
+    @action(detail=False, methods=["get", "post"], url_path="historial/export")
+    def historial_export(self, request):
+        u = request.user
+        if getattr(u, "rol", None) != "administrador":
+            return Response({"detail": "Solo administrador puede exportar historial."}, status=403)
+
+        qs = self._historial_filtered_qs(request).order_by("asignacion_id", "created_at", "id")
+        fmt = (getattr(request, "data", None) or {}).get("format")
+        if not fmt:
+            fmt = request.query_params.get("format", "xlsx")
+        fmt = (fmt or "xlsx").lower()
+
+        headers = ["historial_id","asignacion_id","direccion","comuna","marca","tecnologia","fecha","bloque","accion","detalles","usuario_email","creado"]
+
+        if fmt == "csv":
+            buff = io.StringIO()
+            writer = csv.writer(buff)
+            writer.writerow(headers)
+            for h in qs.iterator():
+                writer.writerow([
+                    h.id,
+                    h.asignacion_id,
+                    getattr(h.asignacion, "direccion", ""),
+                    getattr(h.asignacion, "comuna", ""),
+                    getattr(h.asignacion, "marca", ""),
+                    getattr(h.asignacion, "tecnologia", ""),
+                    getattr(h.asignacion, "fecha", "") or "",
+                    getattr(h.asignacion, "reagendado_bloque", "") or "",
+                    h.accion,
+                    h.detalles,
+                    getattr(h.usuario, "email", ""),
+                    h.created_at.isoformat(),
+                ])
+            resp = HttpResponse(buff.getvalue(), content_type="text/csv; charset=utf-8")
+            resp["Content-Disposition"] = 'attachment; filename="historial.csv"'
+            return resp
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Historial"
+        ws.append(headers)
+        for h in qs.iterator():
+            ws.append([
+                h.id,
+                h.asignacion_id,
+                getattr(h.asignacion, "direccion", ""),
+                getattr(h.asignacion, "comuna", ""),
+                getattr(h.asignacion, "marca", ""),
+                getattr(h.asignacion, "tecnologia", ""),
+                getattr(h.asignacion, "fecha", "") or "",
+                getattr(h.asignacion, "reagendado_bloque", "") or "",
+                h.accion,
+                h.detalles,
+                getattr(h.usuario, "email", ""),
+                h.created_at.isoformat(),
+            ])
+        out = io.BytesIO()
+        wb.save(out)
+        resp = HttpResponse(out.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        resp["Content-Disposition"] = 'attachment; filename="historial.xlsx"'
+        return resp
+
+    # === CARGA CSV/XLSX (planning semanal) ===
+    @extend_schema(request=CargaCSVSerializer)
     @action(
         detail=False,
         methods=["post"],
         url_path="cargar_csv",
         parser_classes=[MultiPartParser, FormParser],
-        serializer_class=CargaCSVSerializer,  # para que el Browsable API muestre el campo file
+        serializer_class=CargaCSVSerializer,
     )
     def cargar_csv(self, request):
-        """
-        Acepta:
-        - CSV (.csv)
-        - Excel (.xlsx) primera hoja
-
-        Mapea encabezados del archivo de Claro a nuestros nombres canónicos,
-        detectando automáticamente la fila real de encabezados en XLSX.
-        """
         f = request.FILES.get("file")
         if not f:
             return Response({"detail": "Sube un archivo en el campo 'file'."}, status=400)
@@ -376,96 +440,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             }
         })
 
-    # ✅ NUEVA ACCIÓN: técnico marca el estado del cliente en una visita asignada
-    @extend_schema(
-        request=EstadoClienteActionSerializer,
-        responses={200: DireccionAsignadaSerializer}
-    )
-    @action(
-        detail=True,
-        methods=["post"],
-        url_path="estado_cliente",
-        serializer_class=EstadoClienteActionSerializer,  # fuerza el formulario correcto en Browsable API
-    )
-    def estado_cliente(self, request, pk=None):
-        user = request.user
-        if getattr(user, "rol", None) != "tecnico":
-            return Response({"detail": "Solo técnicos pueden usar esta acción."}, status=status.HTTP_403_FORBIDDEN)
-
-        asignacion = self.get_object()
-        if asignacion.asignado_a_id != user.id:
-            return Response({"detail": "Esta dirección no está asignada a tu usuario."}, status=status.HTTP_403_FORBIDDEN)
-
-        # Valida payload con serializer (aparece como formulario en Browsable API)
-        payload = self.get_serializer(data=request.data)
-        payload.is_valid(raise_exception=True)
-        data = payload.validated_data
-
-        estado = data["estado_cliente"]
-        reagendado_fecha = data.get("reagendado_fecha")
-        reagendado_bloque = data.get("reagendado_bloque")
-        ont_modem_ok = data.get("ont_modem_ok", None)
-        servicios = data.get("servicios") or []
-        categorias = data.get("categorias") or {}
-        descripcion_problema = data.get("descripcion_problema") or ""
-        fotos = data.get("fotos") or []
-
-        # Validación específica para reagendo
-        if estado == "reagendo":
-            if not reagendado_fecha or not reagendado_bloque:
-                return Response({"detail": "Debe indicar reagendado_fecha y reagendado_bloque."}, status=400)
-            if reagendado_fecha < timezone.localdate():
-                return Response({"detail": "La fecha reagendada no puede ser pasada."}, status=400)
-
-        # Crear auditoría como traza formal
-        audit = AuditoriaVisita.objects.create(
-            asignacion=asignacion,
-            tecnico=user,
-            estado_cliente=estado,
-            reagendado_fecha=reagendado_fecha,
-            reagendado_bloque=reagendado_bloque,
-            ont_modem_ok=ont_modem_ok,
-            servicios=servicios,
-            categorias=categorias,
-            descripcion_problema=descripcion_problema,
-            fotos=fotos,
-        )
-
-        # Efectos sobre la asignación + historial (mapeo a estado de asignación)
-        if estado == "reagendo":
-            asignacion.reagendado_fecha = audit.reagendado_fecha
-            asignacion.reagendado_bloque = audit.reagendado_bloque
-            asignacion.estado = EstadoAsignacion.REAGENDADA
-            asignacion.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
-            HistorialAsignacion.objects.create(
-                asignacion=asignacion,
-                accion=HistorialAsignacion.Accion.REAGENDADA,
-                detalles=f"Reagendada por técnico a {audit.reagendado_fecha} {audit.reagendado_bloque}",
-                usuario=user,
-            )
-        elif estado == "autoriza":
-            asignacion.estado = EstadoAsignacion.VISITADA
-            asignacion.save(update_fields=["estado", "updated_at"])
-            HistorialAsignacion.objects.create(
-                asignacion=asignacion,
-                accion=HistorialAsignacion.Accion.AUDITORIA_CREADA,
-                detalles="Auditoría con estado 'autoriza' (asignación VISITADA).",
-                usuario=user,
-            )
-        else:
-            # sin_moradores / rechaza / contingencia / masivo → CANCELADA
-            asignacion.estado = EstadoAsignacion.CANCELADA
-            asignacion.save(update_fields=["estado", "updated_at"])
-            HistorialAsignacion.objects.create(
-                asignacion=asignacion,
-                accion=HistorialAsignacion.Accion.ESTADO_CLIENTE,
-                detalles=f"Estado cliente = {estado} (asignación CANCELADA).",
-                usuario=user,
-            )
-
-        # Respuesta: asignación (para refrescar la tarjeta en el front)
-        return Response(DireccionAsignadaSerializer(asignacion).data, status=200)
-
+    # ---------- DESASIGNAR (ADMIN) ----------
     @action(detail=True, methods=["patch"], url_path="desasignar")
     def desasignar(self, request, pk=None):
         obj = self.get_object()
@@ -481,3 +456,235 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             usuario=request.user,
         )
         return Response(self.get_serializer(obj).data)
+
+    # ---------- ESTADO DEL CLIENTE (Q5) ----------
+    @action(detail=True, methods=["post"], url_path="estado_cliente")
+    def estado_cliente(self, request, pk=None):
+        """
+        Q5 Estado del Cliente:
+        - autoriza -> VISITADA
+        - sin_moradores | rechaza | contingencia | masivo -> CANCELADA
+        - reagendo -> requiere fecha/bloque -> REAGENDADA + notificación real
+        """
+        asignacion = self.get_object()
+        data = request.data or {}
+        estado_cliente = (data.get("estado_cliente") or "").strip().lower()
+
+        valid = {"autoriza", "sin_moradores", "rechaza", "contingencia", "masivo", "reagendo"}
+        if estado_cliente not in valid:
+            return Response({"detail": "estado_cliente inválido."}, status=400)
+
+        with transaction.atomic():
+            if estado_cliente == "autoriza":
+                asignacion.estado = "VISITADA"
+                asignacion.save(update_fields=["estado", "updated_at"])
+
+                HistorialAsignacion.objects.create(
+                    asignacion=asignacion,
+                    accion="CERRADA" if hasattr(HistorialAsignacion.Accion, "CERRADA") else "ESTADO_CLIENTE",
+                    detalles="Estado cliente = autoriza (asignación VISITADA).",
+                    usuario=request.user,
+                )
+
+            elif estado_cliente in {"sin_moradores", "rechaza", "contingencia", "masivo"}:
+                asignacion.estado = "CANCELADA"
+                asignacion.save(update_fields=["estado", "updated_at"])
+
+                HistorialAsignacion.objects.create(
+                    asignacion=asignacion,
+                    accion="ESTADO_CLIENTE",
+                    detalles=f"Estado cliente = {estado_cliente} (asignación CANCELADA).",
+                    usuario=request.user,
+                )
+
+            else:  # reagendo
+                f_raw = data.get("reagendado_fecha")
+                reag_fecha = _parse_date(f_raw)
+                reag_bloque = _normalize_bloque(data.get("reagendado_bloque"))
+                if not reag_fecha or not reag_bloque:
+                    return Response(
+                        {"estado_cliente": ["Este campo es requerido."], "detail": "Debe indicar fecha y bloque."},
+                        status=400
+                    )
+                if reag_fecha < timezone.localdate():
+                    return Response({"detail": "La fecha reagendada no puede ser pasada."}, status=400)
+
+                asignacion.reagendado_fecha = reag_fecha
+                asignacion.reagendado_bloque = reag_bloque
+                asignacion.estado = "REAGENDADA"
+                asignacion.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
+
+                HistorialAsignacion.objects.create(
+                    asignacion=asignacion,
+                    accion="REAGENDADA",
+                    detalles=f"Reagendada desde auditoría a {reag_fecha} {reag_bloque}",
+                    usuario=request.user,
+                )
+
+                # ---- Registrar y ENVIAR notificación real por email ----
+                destino = getattr(asignacion.asignado_a, "email", "") or ""
+                notif = Notificacion.objects.create(
+                    asignacion_id=asignacion.id,
+                    canal=Notificacion.Canal.EMAIL,
+                    tipo="reagendamiento",
+                    destino=destino,  # si está vacío, notify no envía
+                    asunto=f"Reagendamiento Asignación #{asignacion.id}",
+                    payload={
+                        "asignacion_id": asignacion.id,
+                        "direccion": asignacion.direccion,
+                        "comuna": asignacion.comuna,
+                        "reagendado_fecha": reag_fecha.isoformat(),
+                        "reagendado_bloque": reag_bloque,
+                        "tecnico_id": getattr(request.user, "id", None),
+                        "tecnico_email": destino,
+                    },
+                    status=Notificacion.Estado.PENDING,
+                )
+                enviar_notificacion_real(notif)
+
+        return Response(self.get_serializer(asignacion).data)
+
+    # ---------- MÉTRICAS (resumen) ----------
+    @action(detail=False, methods=["get"], url_path="metrics/resumen")
+    def metrics_resumen(self, request):
+        qs = DireccionAsignada.objects.all()
+        p = request.query_params
+
+        if p.get("fecha__gte"): qs = qs.filter(fecha__gte=p["fecha__gte"])
+        if p.get("fecha__lte"): qs = qs.filter(fecha__lte=p["fecha__lte"])
+        if p.get("tecnico_id"): qs = qs.filter(asignado_a_id=p["tecnico_id"])
+        if p.get("zona"): qs = qs.filter(zona=p["zona"])
+        if p.get("comuna"): qs = qs.filter(comuna=p["comuna"])
+        if p.get("marca"): qs = qs.filter(marca=p["marca"])
+        if p.get("tecnologia"): qs = qs.filter(tecnologia=p["tecnologia"])
+
+        total = qs.count()
+        c = lambda s: qs.filter(estado=s).count()
+        pend, asig, vis, canc, reag = (c("PENDIENTE"), c("ASIGNADA"), c("VISITADA"), c("CANCELADA"), c("REAGENDADA"))
+        pct = lambda n: round(100.0 * n / total, 1) if total else 0.0
+        return Response({
+            "total": total,
+            "pendientes": pend,
+            "asignadas": asig,
+            "visitadas": vis,
+            "canceladas": canc,
+            "reagendadas": reag,
+            "pct_visitadas": pct(vis),
+            "pct_reagendadas": pct(reag),
+        })
+
+    # ---------- MÉTRICAS (por técnico autenticado o pasado por query) ----------
+    @action(detail=False, methods=["get"], url_path="metrics/tecnico")
+    def metrics_tecnico(self, request):
+        qs = DireccionAsignada.objects.all()
+        p = request.query_params
+        u = request.user
+
+        tecnico_id = p.get("tecnico_id")
+        if getattr(u, "rol", None) == "tecnico":
+            tecnico_id = u.id
+        if tecnico_id:
+            qs = qs.filter(asignado_a_id=tecnico_id)
+
+        if p.get("fecha__gte"): qs = qs.filter(fecha__gte=p["fecha__gte"])
+        if p.get("fecha__lte"): qs = qs.filter(fecha__lte=p["fecha__lte"])
+        if p.get("zona"): qs = qs.filter(zona=p["zona"])
+        if p.get("comuna"): qs = qs.filter(comuna=p["comuna"])
+        if p.get("marca"): qs = qs.filter(marca=p["marca"])
+        if p.get("tecnologia"): qs = qs.filter(tecnologia=p["tecnologia"])
+
+        total = qs.count()
+        c = lambda s: qs.filter(estado=s).count()
+        pend, asig, vis, canc, reag = (c("PENDIENTE"), c("ASIGNADA"), c("VISITADA"), c("CANCELADA"), c("REAGENDADA"))
+        pct = lambda n: round(100.0 * n / total, 1) if total else 0.0
+        return Response({
+            "total": total,
+            "pendientes": pend,
+            "asignadas": asig,
+            "visitadas": vis,
+            "canceladas": canc,
+            "reagendadas": reag,
+            "pct_visitadas": pct(vis),
+            "pct_reagendadas": pct(reag),
+        })
+
+    # ---------- MÉTRICAS: EXPORT (CSV/XLSX, solo admin) ----------
+    @action(detail=False, methods=["get", "post"], url_path="metrics/export")
+    def metrics_export(self, request):
+        if getattr(request.user, "rol", None) != "administrador":
+            return Response({"detail": "Solo administrador puede exportar métricas."}, status=403)
+
+        resumen = self.metrics_resumen(request).data
+        fmt = (getattr(request, "data", None) or {}).get("format")
+        if not fmt:
+            fmt = request.query_params.get("format", "xlsx")
+        fmt = (fmt or "xlsx").lower()
+
+        headers = ["total","pendientes","asignadas","visitadas","canceladas","reagendadas","pct_visitadas","pct_reagendadas"]
+
+        if fmt == "csv":
+            buff = io.StringIO()
+            w = csv.writer(buff)
+            w.writerow(headers)
+            w.writerow([
+                resumen["total"], resumen["pendientes"], resumen["asignadas"],
+                resumen["visitadas"], resumen["canceladas"], resumen["reagendadas"],
+                resumen["pct_visitadas"], resumen["pct_reagendadas"]
+            ])
+            resp = HttpResponse(buff.getvalue(), content_type="text/csv; charset=utf-8")
+            resp["Content-Disposition"] = 'attachment; filename=\"metricas_resumen.csv\"'
+            return resp
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Resumen"
+        ws.append(headers)
+        ws.append([
+            resumen["total"], resumen["pendientes"], resumen["asignadas"],
+            resumen["visitadas"], resumen["canceladas"], resumen["reagendadas"],
+            resumen["pct_visitadas"], resumen["pct_reagendadas"]
+        ])
+        out = io.BytesIO()
+        wb.save(out)
+        resp = HttpResponse(out.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        resp["Content-Disposition"] = 'attachment; filename=\"metricas_resumen.xlsx\"'
+        return resp
+
+    # ---------- MÉTRICAS: SERIE (datos listos para gráficos) ----------
+    @action(detail=False, methods=["get"], url_path="metrics/serie")
+    def metrics_serie(self, request):
+        """
+        Devuelve serie por día para Visitadas, Reagendadas y Canceladas
+        (según filtros de fecha/zona/tecnico/etc.) usando asignacion.fecha.
+        """
+        qs = DireccionAsignada.objects.all()
+        p = request.query_params
+
+        if p.get("fecha__gte"): qs = qs.filter(fecha__gte=p["fecha__gte"])
+        if p.get("fecha__lte"): qs = qs.filter(fecha__lte=p["fecha__lte"])
+        if p.get("tecnico_id"): qs = qs.filter(asignado_a_id=p["tecnico_id"])
+        if p.get("zona"): qs = qs.filter(zona=p["zona"])
+        if p.get("comuna"): qs = qs.filter(comuna=p["comuna"])
+        if p.get("marca"): qs = qs.filter(marca=p["marca"])
+        if p.get("tecnologia"): qs = qs.filter(tecnologia=p["tecnologia"])
+
+        def serie_por_estado(estado: str):
+            base = qs.filter(estado=estado, fecha__isnull=False)
+            agg = (base.annotate(d=TruncDate("fecha"))
+                        .values("d").annotate(c=Count("id")).order_by("d"))
+            return {a["d"].isoformat(): a["c"] for a in agg}
+
+        v = serie_por_estado("VISITADA")
+        r = serie_por_estado("REAGENDADA")
+        c = serie_por_estado("CANCELADA")
+
+        fechas = sorted(set(v.keys()) | set(r.keys()) | set(c.keys()))
+        data = {
+            "labels": fechas,
+            "series": {
+                "visitadas": [v.get(d, 0) for d in fechas],
+                "reagendadas": [r.get(d, 0) for d in fechas],
+                "canceladas": [c.get(d, 0) for d in fechas],
+            }
+        }
+        return Response(data)

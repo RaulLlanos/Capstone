@@ -30,7 +30,7 @@ class AuditoriaVisita(models.Model):
     categorias = models.JSONField(default=dict, blank=True)    # p.ej. {"internet":["cortes","intermitencia"], "tv":["pixelado"]}
     descripcion_problema = models.TextField(blank=True, default="")
 
-    # Fotos simples (rutas/URLs o nombres de archivo; si tienes upload ya hecho, puedes ignorar)
+    # Fotos simples (rutas/URLs o nombres de archivo)
     fotos = models.JSONField(default=list, blank=True)
 
     # Bloques de cuestionario (Q16..Q32 etc.)
@@ -47,6 +47,7 @@ class AuditoriaVisita(models.Model):
         indexes = [
             models.Index(fields=["created_at"], name="auditoria_a_created_bb8ea3_idx"),
             models.Index(fields=["estado_cliente"], name="auditoria_estado_idx"),
+            models.Index(fields=["asignacion", "-created_at"], name="auditoria_asig_created_idx"),
         ]
 
     def __str__(self):
