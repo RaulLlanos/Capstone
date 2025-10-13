@@ -1,4 +1,3 @@
-# asignaciones/models.py
 from django.db import models
 from django.db.models import Q
 from usuarios.models import Usuario
@@ -38,7 +37,7 @@ class DireccionAsignada(models.Model):
     tecnologia  = models.CharField("Tecnología", max_length=10, choices=Tecnologia.choices)
     marca       = models.CharField("Marca", max_length=10, choices=Marca.choices)
     rut_cliente = models.CharField("RUT cliente", max_length=20)
-    id_vivienda = models.CharField("ID vivienda", max_length=50)
+    id_vivienda = models.CharField("ID vivienda", max_length=50, blank=True)
     direccion   = models.CharField("Dirección del cliente", max_length=255)
     comuna      = models.CharField("Comuna", max_length=80, blank=True)
     zona        = models.CharField("Zona", max_length=10, choices=ZonaSantiago.choices, blank=True)
@@ -76,18 +75,21 @@ class DireccionAsignada(models.Model):
             models.Index(fields=["encuesta"]),
             models.Index(fields=["comuna"]),
             models.Index(fields=["zona"]),
+            models.Index(fields=["estado"]),
+            models.Index(fields=["fecha"]),
+            models.Index(fields=["asignado_a"]),
         ]
         constraints = [
+            # clave única por id_vivienda cuando está presente
             models.UniqueConstraint(
-                fields=["rut_cliente", "id_vivienda"],
-                condition=Q(asignado_a__isnull=False) & Q(estado__in=["PENDIENTE", "ASIGNADA", "REAGENDADA"]),
-                name="uniq_activa_por_cliente_vivienda"
+                fields=["id_vivienda"],
+                condition=Q(id_vivienda__isnull=False) & ~Q(id_vivienda=""),
+                name="uniq_id_vivienda_when_present"
             )
         ]
 
     def __str__(self):
-        who = self.asignado_a.email if self.asignado_a else "sin asignar"
-        return f"{self.direccion} ({self.marca}/{self.tecnologia}) → {who}"
+        return f"{self.direccion} ({self.comuna})"
 
 class Reagendamiento(models.Model):
     asignacion = models.ForeignKey(

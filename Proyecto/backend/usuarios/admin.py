@@ -34,3 +34,10 @@ class UsuarioAdminPersonalizado(UserAdmin):
         form = super().get_form(request, obj, **kwargs)
         form.base_fields.pop("username", None)
         return form
+
+# Ocultar "Grupos" si no lo usarán
+from django.contrib.auth.models import Group
+try:
+    admin.site.unregister(Group)
+except Exception:
+    pass

@@ -2,8 +2,7 @@ from datetime import date
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import DireccionAsignada, HistorialAsignacion, BloqueHorario
-from usuarios.models import Usuario
+from .models import DireccionAsignada, HistorialAsignacion
 
 
 class DireccionAsignadaSerializer(serializers.ModelSerializer):
@@ -19,7 +18,8 @@ class DireccionAsignadaSerializer(serializers.ModelSerializer):
             "created_at", "updated_at",
             "asignado_a",
         ]
-        read_only_fields = ["created_at", "updated_at"]
+        # El técnico NO puede mover la asignación por API; admin lo hace en Admin.
+        read_only_fields = ["created_at", "updated_at", "asignado_a"]
 
     def validate_fecha(self, value):
         # Permitir null (pendiente sin fecha), pero si viene, no puede ser pasada
@@ -90,31 +90,26 @@ class CsvRowResult(serializers.Serializer):
     errors = serializers.ListField(child=serializers.CharField(), required=False)
 
 
-# === NUEVO: serializer para la acción de estado del cliente ===
-class EstadoClienteActionSerializer(serializers.Serializer):
-    """
-    Payload para POST /api/asignaciones/{id}/estado_cliente/
-    Muestra exactamente las 6 opciones de estado de cliente.
-    """
-    estado_cliente = serializers.ChoiceField(choices=[
-        ("autoriza", "autoriza"),
-        ("sin_moradores", "sin_moradores"),
-        ("rechaza", "rechaza"),
-        ("contingencia", "contingencia"),
-        ("masivo", "masivo"),
-        ("reagendo", "reagendo"),
-    ])
-    reagendado_fecha = serializers.DateField(required=False, allow_null=True)
-    reagendado_bloque = serializers.ChoiceField(
-        choices=BloqueHorario.choices, required=False, allow_null=True
-    )
-    ont_modem_ok = serializers.BooleanField(required=False)
-    servicios = serializers.ListField(child=serializers.CharField(), required=False)
-    categorias = serializers.DictField(required=False)
-    descripcion_problema = serializers.CharField(required=False, allow_blank=True)
-    fotos = serializers.ListField(child=serializers.CharField(), required=False)
-
-
-# === NUEVO: serializer input de archivo para upload ===
 class CargaCSVSerializer(serializers.Serializer):
     file = serializers.FileField()
+
+
+# ====== Serializer para mostrar un formulario de export en el Browsable API ======
+class HistorialExportSerializer(serializers.Serializer):
+    format = serializers.ChoiceField(choices=[("csv", "CSV"), ("xlsx", "XLSX")], default="csv")
+    # mismos filtros que el listado
+    estado = serializers.CharField(required=False, allow_blank=True)
+    marca = serializers.CharField(required=False, allow_blank=True)
+    tecnologia = serializers.CharField(required=False, allow_blank=True)
+    comuna = serializers.CharField(required=False, allow_blank=True)
+    zona = serializers.CharField(required=False, allow_blank=True)
+    encuesta = serializers.CharField(required=False, allow_blank=True)
+    tecnico_id = serializers.IntegerField(required=False)
+    desde = serializers.CharField(required=False, allow_blank=True, help_text="YYYY-MM-DD o HOY")
+    hasta = serializers.CharField(required=False, allow_blank=True, help_text="YYYY-MM-DD o HOY")
+    creado_desde = serializers.CharField(required=False, allow_blank=True, help_text="YYYY-MM-DD o HOY")
+    creado_hasta = serializers.CharField(required=False, allow_blank=True, help_text="YYYY-MM-DD o HOY")
+    ordering = serializers.ChoiceField(
+        choices=[("created_at", "created_at ↑"), ("-created_at", "created_at ↓"), ("id", "id ↑"), ("-id", "id ↓")],
+        required=False
+    )

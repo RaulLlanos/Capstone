@@ -167,10 +167,11 @@ REST_FRAMEWORK = {
 
 # === drf-spectacular (OpenAPI) ===
 SPECTACULAR_SETTINGS = {
-    "TITLE": "ClaroVTR API",
-    "DESCRIPTION": "API para asignaciones y auditorías",
+    "TITLE": "API ClaroVTR",
+    "DESCRIPTION": "API para asignaciones, auditorías, historial y métricas",
     "VERSION": "1.0.0",
 }
+
 
 # === Hash de contraseñas (bcrypt primero) ===
 PASSWORD_HASHERS = [
@@ -208,3 +209,17 @@ else:
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
     JWT_COOKIE_SECURE = False
+
+# === Email real (SMTP) ===
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.sendgrid.net")  # o tu SMTP
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")         # ej: "apikey" en SendGrid
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "") # tu API key / password SMTP
+EMAIL_USE_TLS = True
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "no-reply@claro-vtr.local")
+
+# Correos que también recibirán copia de notificación de reagendo (opcional)
+NOTIFY_ADMIN_EMAILS = [
+    e.strip() for e in os.environ.get("NOTIFY_ADMIN_EMAILS", "").split(",") if e.strip()
+]
