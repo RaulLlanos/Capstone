@@ -31,7 +31,7 @@ from .serializers import (
     CargaCSVSerializer,
 )
 
-# === Notificaciones (registro + envío real por email) ===
+# === Notificaciones (envío real por SMTP) ===
 from core.models import Notificacion
 from core.notify import enviar_notificacion_real
 
@@ -170,7 +170,7 @@ def _canon_get(row: Dict[str, Any], header_map: Dict[str, str], key: str) -> Any
 class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     """
     - Administrador: CRUD total + carga CSV/XLSX + reasignar/desasignar.
-    - Técnico: lectura + acción POST /estado_cliente/.
+    - Técnico: lectura + acción POST /estado_cliente/ y /asignarme/.
     """
     queryset = DireccionAsignada.objects.all().order_by("-created_at")
     serializer_class = DireccionAsignadaSerializer
@@ -206,27 +206,97 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
         return qs
 
-    # ---------- helper: mismo filtro de historial para listar/exportar ----------
-    def _historial_filtered_qs(self, request):
+    # ---------- Acción: ASIGNARME (técnico) ----------
+    @action(detail=True, methods=["post"], url_path="asignarme")
+    def asignarme(self, request, pk=None):
+        """
+        Permite al TÉCNICO autenticado asignarse una visita libre.
+        - Si ya está asignada a otro técnico -> 409.
+        - Si ya está asignada al mismo técnico -> 200 (idempotente).
+        - Cambia estado a ASIGNADA y registra historial.
+        """
+        u = request.user
+        if getattr(u, "rol", None) != "tecnico":
+            return Response({"detail": "Solo técnicos pueden usar esta acción."}, status=403)
+
+        obj = self.get_object()
+
+        if obj.asignado_a_id and obj.asignado_a_id != u.id:
+            return Response({"detail": "La visita ya está asignada a otro técnico."}, status=409)
+
+        with transaction.atomic():
+            obj.asignado_a_id = u.id
+            if obj.estado in {"PENDIENTE", "REAGENDADA", "CANCELADA"}:
+                obj.estado = "ASIGNADA"
+            obj.save(update_fields=["asignado_a", "estado", "updated_at"])
+
+            HistorialAsignacion.objects.create(
+                asignacion=obj,
+                accion="asignada",
+                detalles=f"El técnico {u.email} se asignó la visita.",
+                usuario=u,
+            )
+
+        return Response(self.get_serializer(obj).data)
+
+    # ---------- HISTORIAL ----------
+    @action(detail=False, methods=["get"], url_path="historial")
+    def historial(self, request):
         u = request.user
         tecnico_id = request.query_params.get("tecnico_id")
         qs = HistorialAsignacion.objects.select_related("asignacion", "usuario").all()
 
         if getattr(u, "rol", None) == "tecnico":
             qs = qs.filter(Q(usuario_id=u.id) | Q(asignacion__asignado_a_id=u.id))
-        elif tecnico_id:
-            qs = qs.filter(Q(usuario_id=tecnico_id) | Q(asignacion__asignado_a_id=tecnico_id))
+        else:
+            if tecnico_id:
+                qs = qs.filter(Q(usuario_id=tecnico_id) | Q(asignacion__asignado_a_id=tecnico_id))
 
         # Filtros de campos de asignación
-        p = request.query_params
-        if p.get("estado"): qs = qs.filter(asignacion__estado=p["estado"])
-        if p.get("marca"): qs = qs.filter(asignacion__marca=p["marca"])
-        if p.get("tecnologia"): qs = qs.filter(asignacion__tecnologia=p["tecnologia"])
-        if p.get("comuna"): qs = qs.filter(asignacion__comuna=p["comuna"])
-        if p.get("zona"): qs = qs.filter(asignacion__zona=p["zona"])
-        if p.get("encuesta"): qs = qs.filter(asignacion__encuesta=p["encuesta"])
+        estado = request.query_params.get("estado")
+        marca = request.query_params.get("marca")
+        tecnologia = request.query_params.get("tecnologia")
+        comuna = request.query_params.get("comuna")
+        zona = request.query_params.get("zona")
+        encuesta = request.query_params.get("encuesta")
 
-        # Rango por fecha de asignación (alias desde/hasta y HOY)
+        if estado: qs = qs.filter(asignacion__estado=estado)
+        if marca: qs = qs.filter(asignacion__marca=marca)
+        if tecnologia: qs = qs.filter(asignacion__tecnologia=tecnologia)
+        if comuna: qs = qs.filter(asignacion__comuna=comuna)
+        if zona: qs = qs.filter(asignacion__zona=zona)
+        if encuesta: qs = qs.filter(asignacion__encuesta=encuesta)
+
+        # Rango por fecha de asignación
+        desde = request.query_params.get("fecha_after") or request.query_params.get("desde")
+        hasta = request.query_params.get("fecha_before") or request.query_params.get("hasta")
+        hoy = timezone.localdate().isoformat()
+        if desde and str(desde).upper() == "HOY": desde = hoy
+        if hasta and str(hasta).upper() == "HOY": hasta = hoy
+        if desde: qs = qs.filter(asignacion__fecha__gte=desde)
+        if hasta: qs = qs.filter(asignacion__fecha__lte=hasta)
+
+        qs = qs.order_by("-created_at", "-id")
+        page = self.paginate_queryset(qs)
+        s = HistorialAsignacionSerializer(page or qs, many=True)
+        return self.get_paginated_response(s.data) if page is not None else Response(s.data)
+
+    @action(detail=False, methods=["get"], url_path="historial/export")
+    def historial_export(self, request):
+        u = request.user
+        if getattr(u, "rol", None) != "administrador":
+            return Response({"detail": "Solo administrador puede exportar historial."}, status=403)
+
+        p = request.query_params
+        qs = HistorialAsignacion.objects.select_related("asignacion", "usuario").all()
+
+        # mismos filtros que /historial
+        estado = p.get("estado")
+        if estado: qs = qs.filter(asignacion__estado=estado)
+        for k, fk in [("marca","asignacion__marca"), ("tecnologia","asignacion__tecnologia"),
+                      ("comuna","asignacion__comuna"), ("zona","asignacion__zona"), ("encuesta","asignacion__encuesta")]:
+            v = p.get(k)
+            if v: qs = qs.filter(**{fk: v})
         desde = p.get("fecha_after") or p.get("desde")
         hasta = p.get("fecha_before") or p.get("hasta")
         hoy = timezone.localdate().isoformat()
@@ -235,35 +305,13 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         if desde: qs = qs.filter(asignacion__fecha__gte=desde)
         if hasta: qs = qs.filter(asignacion__fecha__lte=hasta)
 
-        return qs
-
-    # ---------- HISTORIAL (lista) ----------
-    @action(detail=False, methods=["get"], url_path="historial")
-    def historial(self, request):
-        qs = self._historial_filtered_qs(request).order_by("-created_at", "-id")
-        page = self.paginate_queryset(qs)
-        s = HistorialAsignacionSerializer(page or qs, many=True)
-        return self.get_paginated_response(s.data) if page is not None else Response(s.data)
-
-    # ---------- HISTORIAL: EXPORT (CSV/XLSX, solo admin) ----------
-    @action(detail=False, methods=["get", "post"], url_path="historial/export")
-    def historial_export(self, request):
-        u = request.user
-        if getattr(u, "rol", None) != "administrador":
-            return Response({"detail": "Solo administrador puede exportar historial."}, status=403)
-
-        qs = self._historial_filtered_qs(request).order_by("asignacion_id", "created_at", "id")
-        fmt = (getattr(request, "data", None) or {}).get("format")
-        if not fmt:
-            fmt = request.query_params.get("format", "xlsx")
-        fmt = (fmt or "xlsx").lower()
-
-        headers = ["historial_id","asignacion_id","direccion","comuna","marca","tecnologia","fecha","bloque","accion","detalles","usuario_email","creado"]
+        fmt = (p.get("format") or "xlsx").lower()
+        qs = qs.order_by("asignacion_id", "created_at", "id")
 
         if fmt == "csv":
             buff = io.StringIO()
             writer = csv.writer(buff)
-            writer.writerow(headers)
+            writer.writerow(["historial_id","asignacion_id","direccion","comuna","marca","tecnologia","fecha","bloque","accion","detalles","usuario_email","creado"])
             for h in qs.iterator():
                 writer.writerow([
                     h.id,
@@ -286,7 +334,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         wb = Workbook()
         ws = wb.active
         ws.title = "Historial"
-        ws.append(headers)
+        ws.append(["historial_id","asignacion_id","direccion","comuna","marca","tecnologia","fecha","bloque","accion","detalles","usuario_email","creado"])
         for h in qs.iterator():
             ws.append([
                 h.id,
@@ -308,15 +356,10 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         resp["Content-Disposition"] = 'attachment; filename="historial.xlsx"'
         return resp
 
-    # === CARGA CSV/XLSX (planning semanal) ===
+    # === CARGA CSV/XLSX ===
     @extend_schema(request=CargaCSVSerializer)
-    @action(
-        detail=False,
-        methods=["post"],
-        url_path="cargar_csv",
-        parser_classes=[MultiPartParser, FormParser],
-        serializer_class=CargaCSVSerializer,
-    )
+    @action(detail=False, methods=["post"], url_path="cargar_csv",
+            parser_classes=[MultiPartParser, FormParser], serializer_class=CargaCSVSerializer)
     def cargar_csv(self, request):
         f = request.FILES.get("file")
         if not f:
@@ -350,7 +393,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             bloque     = _normalize_bloque(_canon_get(row, header_map, "bloque"))
             asignado_email = _s(_canon_get(row, header_map, "asignado_email"))
 
-            # Fechas pasadas → las ignoramos (queda sin fecha)
             if fecha_val and fecha_val < today:
                 fecha_val = None
 
@@ -379,7 +421,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             if fecha_val:
                 defaults["fecha"] = fecha_val
 
-            # upsert por id_vivienda si viene, si no por (direccion, comuna)
             if id_vivienda:
                 obj, was_created = DireccionAsignada.objects.get_or_create(
                     id_vivienda=id_vivienda,
@@ -392,14 +433,12 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                     defaults={**defaults, "estado": "PENDIENTE"},
                 )
 
-            # seteo/actualizo
             for k, v in defaults.items():
                 setattr(obj, k, v)
 
             if bloque:
-                obj.reagendado_bloque = None  # (opcional)
+                obj.reagendado_bloque = None
 
-            # estado / técnico
             if asignado:
                 obj.asignado_a = asignado
                 if not obj.fecha and fecha_val:
@@ -464,9 +503,9 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         Q5 Estado del Cliente:
         - autoriza -> VISITADA
         - sin_moradores | rechaza | contingencia | masivo -> CANCELADA
-        - reagendo -> requiere fecha/bloque -> REAGENDADA + notificación real
+        - reagendo -> requiere fecha/bloque -> REAGENDADA + notificación real por email
         """
-        asignacion = self.get_object()
+        obj = self.get_object()
         data = request.data or {}
         estado_cliente = (data.get("estado_cliente") or "").strip().lower()
 
@@ -476,75 +515,84 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
         with transaction.atomic():
             if estado_cliente == "autoriza":
-                asignacion.estado = "VISITADA"
-                asignacion.save(update_fields=["estado", "updated_at"])
+                obj.estado = "VISITADA"
+                obj.save(update_fields=["estado", "updated_at"])
 
                 HistorialAsignacion.objects.create(
-                    asignacion=asignacion,
-                    accion="CERRADA" if hasattr(HistorialAsignacion.Accion, "CERRADA") else "ESTADO_CLIENTE",
+                    asignacion=obj,
+                    accion="ESTADO_CLIENTE",
                     detalles="Estado cliente = autoriza (asignación VISITADA).",
                     usuario=request.user,
                 )
 
             elif estado_cliente in {"sin_moradores", "rechaza", "contingencia", "masivo"}:
-                asignacion.estado = "CANCELADA"
-                asignacion.save(update_fields=["estado", "updated_at"])
+                obj.estado = "CANCELADA"
+                obj.save(update_fields=["estado", "updated_at"])
 
                 HistorialAsignacion.objects.create(
-                    asignacion=asignacion,
+                    asignacion=obj,
                     accion="ESTADO_CLIENTE",
                     detalles=f"Estado cliente = {estado_cliente} (asignación CANCELADA).",
                     usuario=request.user,
                 )
 
             else:  # reagendo
-                f_raw = data.get("reagendado_fecha")
-                reag_fecha = _parse_date(f_raw)
-                reag_bloque = _normalize_bloque(data.get("reagendado_bloque"))
-                if not reag_fecha or not reag_bloque:
-                    return Response(
-                        {"estado_cliente": ["Este campo es requerido."], "detail": "Debe indicar fecha y bloque."},
-                        status=400
-                    )
-                if reag_fecha < timezone.localdate():
+                f = data.get("reagendado_fecha")
+                b = data.get("reagendado_bloque")
+                if not f or not b:
+                    return Response({"estado_cliente": ["Este campo es requerido."], "detail": "Debe indicar fecha y bloque."}, status=400)
+
+                # Validación de fecha futura
+                if str(f) < str(timezone.localdate()):
                     return Response({"detail": "La fecha reagendada no puede ser pasada."}, status=400)
 
-                asignacion.reagendado_fecha = reag_fecha
-                asignacion.reagendado_bloque = reag_bloque
-                asignacion.estado = "REAGENDADA"
-                asignacion.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
+                if b not in {"10-13", "14-18"}:
+                    return Response({"detail": "Bloque inválido (use 10-13 o 14-18)."}, status=400)
+
+                # actualizar asignación
+                obj.reagendado_fecha = f
+                obj.reagendado_bloque = b
+                obj.estado = "REAGENDADA"
+                obj.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
 
                 HistorialAsignacion.objects.create(
-                    asignacion=asignacion,
+                    asignacion=obj,
                     accion="REAGENDADA",
-                    detalles=f"Reagendada desde auditoría a {reag_fecha} {reag_bloque}",
+                    detalles=f"Reagendada desde auditoría a {f} {b}",
                     usuario=request.user,
                 )
 
-                # ---- Registrar y ENVIAR notificación real por email ----
-                destino = getattr(asignacion.asignado_a, "email", "") or ""
+                # Notificación real por email (registra y envía)
+                destino = getattr(obj.asignado_a, "email", "") or ""
                 notif = Notificacion.objects.create(
-                    asignacion_id=asignacion.id,
+                    asignacion=obj,
                     canal=Notificacion.Canal.EMAIL,
                     tipo="reagendamiento",
-                    destino=destino,  # si está vacío, notify no envía
-                    asunto=f"Reagendamiento Asignación #{asignacion.id}",
+                    destino=destino,
+                    asunto=f"Reagendamiento Asignación #{obj.id}",
                     payload={
-                        "asignacion_id": asignacion.id,
-                        "direccion": asignacion.direccion,
-                        "comuna": asignacion.comuna,
-                        "reagendado_fecha": reag_fecha.isoformat(),
-                        "reagendado_bloque": reag_bloque,
+                        "asignacion_id": obj.id,
+                        "direccion": obj.direccion,
+                        "comuna": obj.comuna,
+                        "reagendado_fecha": str(f),
+                        "reagendado_bloque": b,
                         "tecnico_id": getattr(request.user, "id", None),
-                        "tecnico_email": destino,
+                        "tecnico_email": getattr(request.user, "email", None),
                     },
                     status=Notificacion.Estado.PENDING,
                 )
                 enviar_notificacion_real(notif)
 
-        return Response(self.get_serializer(asignacion).data)
+        return Response(self.get_serializer(obj).data)
 
-    # ---------- MÉTRICAS (resumen) ----------
+    # ---------- Proteger borrado de VISITADAS ----------
+    def destroy(self, request, *args, **kwargs):
+        obj = self.get_object()
+        if obj.estado == "VISITADA":
+            return Response({"detail": "No se puede eliminar una visita con estado VISITADA."}, status=403)
+        return super().destroy(request, *args, **kwargs)
+
+    # ---------- MÉTRICAS (resumen/tecnico) ----------
     @action(detail=False, methods=["get"], url_path="metrics/resumen")
     def metrics_resumen(self, request):
         qs = DireccionAsignada.objects.all()
@@ -573,7 +621,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             "pct_reagendadas": pct(reag),
         })
 
-    # ---------- MÉTRICAS (por técnico autenticado o pasado por query) ----------
     @action(detail=False, methods=["get"], url_path="metrics/tecnico")
     def metrics_tecnico(self, request):
         qs = DireccionAsignada.objects.all()
@@ -609,36 +656,31 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         })
 
     # ---------- MÉTRICAS: EXPORT (CSV/XLSX, solo admin) ----------
-    @action(detail=False, methods=["get", "post"], url_path="metrics/export")
+    @action(detail=False, methods=["get"], url_path="metrics/export")
     def metrics_export(self, request):
         if getattr(request.user, "rol", None) != "administrador":
             return Response({"detail": "Solo administrador puede exportar métricas."}, status=403)
 
         resumen = self.metrics_resumen(request).data
-        fmt = (getattr(request, "data", None) or {}).get("format")
-        if not fmt:
-            fmt = request.query_params.get("format", "xlsx")
-        fmt = (fmt or "xlsx").lower()
-
-        headers = ["total","pendientes","asignadas","visitadas","canceladas","reagendadas","pct_visitadas","pct_reagendadas"]
+        fmt = (request.query_params.get("format") or "xlsx").lower()
 
         if fmt == "csv":
             buff = io.StringIO()
             w = csv.writer(buff)
-            w.writerow(headers)
+            w.writerow(["total","pendientes","asignadas","visitadas","canceladas","reagendadas","pct_visitadas","pct_reagendadas"])
             w.writerow([
                 resumen["total"], resumen["pendientes"], resumen["asignadas"],
                 resumen["visitadas"], resumen["canceladas"], resumen["reagendadas"],
                 resumen["pct_visitadas"], resumen["pct_reagendadas"]
             ])
             resp = HttpResponse(buff.getvalue(), content_type="text/csv; charset=utf-8")
-            resp["Content-Disposition"] = 'attachment; filename=\"metricas_resumen.csv\"'
+            resp["Content-Disposition"] = 'attachment; filename="metricas_resumen.csv"'
             return resp
 
         wb = Workbook()
         ws = wb.active
         ws.title = "Resumen"
-        ws.append(headers)
+        ws.append(["total","pendientes","asignadas","visitadas","canceladas","reagendadas","pct_visitadas","pct_reagendadas"])
         ws.append([
             resumen["total"], resumen["pendientes"], resumen["asignadas"],
             resumen["visitadas"], resumen["canceladas"], resumen["reagendadas"],
@@ -647,7 +689,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         out = io.BytesIO()
         wb.save(out)
         resp = HttpResponse(out.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        resp["Content-Disposition"] = 'attachment; filename=\"metricas_resumen.xlsx\"'
+        resp["Content-Disposition"] = 'attachment; filename="metricas_resumen.xlsx"'
         return resp
 
     # ---------- MÉTRICAS: SERIE (datos listos para gráficos) ----------
