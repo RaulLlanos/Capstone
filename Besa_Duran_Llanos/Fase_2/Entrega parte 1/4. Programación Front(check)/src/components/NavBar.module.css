@@ -1,0 +1,182 @@
+.wrapper {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: #ffffff;
+  border-bottom: 1px solid #f0f0f0;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.06);
+}
+
+.inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 10px 16px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+}
+.logoSvg { display: inline-flex; }
+.brandText {
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  color: #e61e24;
+}
+
+.navDesktop {
+  display: none;
+  gap: 14px;
+  align-items: center;
+}
+@media (min-width: 900px) {
+  .navDesktop { display: inline-flex; }
+}
+
+.navLink {
+  position: relative;
+  padding: 8px 10px;
+  color: #e61e24;
+  text-decoration: none;
+  font-weight: 600;
+  border-radius: 8px;
+  transition: all .2s ease;
+}
+.navLink:hover {
+  background: rgba(230, 30, 36, 0.08);
+}
+.navLinkActive {
+  color: #ffffff;
+  background: #e61e24;
+}
+
+.right {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.userBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 10px;
+  border: 1px solid #f0f0f0;
+  background: #fff;
+}
+.avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: #ffe5e6;
+  color: #e61e24;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+}
+.userInfo { line-height: 1.05; }
+.userName {
+  font-size: 13px;
+  font-weight: 700;
+  color: #111827;
+}
+.role {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .2px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.roleAuditor {
+  color: #e61e24;
+  background: #fff5f5;
+  border-color: #ffd7d9;
+}
+.roleTecnico {
+  color: #0a7b34;
+  background: #eefbf3;
+  border-color: #c8f0d9;
+}
+
+.logoutBtn {
+  appearance: none;
+  border: 1px solid #ffd7d9;
+  background: #fff;
+  color: #e61e24;
+  font-weight: 700;
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all .2s ease;
+}
+.logoutBtn:hover {
+  background: #fff5f5;
+  transform: translateY(-1px);
+}
+
+.burger {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-left: 4px;
+  padding: 8px;
+  border: 1px solid #f0f0f0;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+.burger span {
+  width: 18px;
+  height: 2px;
+  background: #e61e24;
+  display: block;
+}
+@media (min-width: 900px) {
+  .burger { display: none; }
+}
+
+.navMobile {
+  display: none;
+  border-top: 1px solid #f6f6f6;
+  background: #ffffff;
+}
+.navMobileOpen {
+  display: grid;
+  gap: 6px;
+  padding: 8px 12px 16px;
+}
+.mobileLink {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: #e61e24;
+  font-weight: 700;
+}
+.mobileLink:hover {
+  background: rgba(230, 30, 36, 0.08);
+}
+.mobileLinkActive {
+  background: #e61e24;
+  color: #fff;
+}
+.mobileLogout {
+  appearance: none;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-weight: 800;
+  cursor: pointer;
+  background: #e61e24;
+  color: #fff;
+  margin-top: 6px;
+}
+.mobileLogout:hover { filter: brightness(0.95); }
