@@ -1,16 +1,14 @@
-# asignaciones/serializers.py
 from rest_framework import serializers
-from usuarios.models import Usuario
 from .models import DireccionAsignada, HistorialAsignacion
 
-# ---- Serializers base ----
+
+# === Serializadores base ===
 
 class DireccionAsignadaSerializer(serializers.ModelSerializer):
-    asignado_a = serializers.PrimaryKeyRelatedField(
-        queryset=Usuario.objects.filter(rol="tecnico"),
-        required=False,
-        allow_null=True
-    )
+    """
+    Serializa una asignación tal como se muestra en tus respuestas actuales.
+    """
+    asignado_a = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta:
         model = DireccionAsignada
@@ -33,39 +31,39 @@ class DireccionAsignadaSerializer(serializers.ModelSerializer):
             "updated_at",
             "asignado_a",
         ]
-        read_only_fields = ["created_at", "updated_at"]
-
-    def get_fields(self):
-        """
-        Para técnicos:
-          - estado: read-only (solo se cambia por /estado_cliente/)
-          - reagendado_*: read-only (solo se cambia por /estado_cliente/ cuando es reagendo)
-          - asignado_a: read-only (técnico no reasigna a otros)
-        Admin mantiene edición completa.
-        """
-        fields = super().get_fields()
-        request = self.context.get("request")
-        user = getattr(request, "user", None)
-        if not user or getattr(user, "rol", None) != "administrador":
-            for name in ("estado", "reagendado_fecha", "reagendado_bloque", "asignado_a"):
-                if name in fields:
-                    fields[name].read_only = True
-        return fields
+        read_only_fields = [
+            "created_at", "updated_at", "asignado_a",
+        ]
 
 
 class HistorialAsignacionSerializer(serializers.ModelSerializer):
+    """
+    Historial con campos de apoyo para el listado/exports.
+    """
     usuario_id = serializers.IntegerField(source="usuario.id", read_only=True)
     usuario_email = serializers.EmailField(source="usuario.email", read_only=True)
     asignacion_id = serializers.IntegerField(source="asignacion.id", read_only=True)
-    asignacion_info = serializers.SerializerMethodField()
 
-    # “Columnas” denormalizadas útiles para filtros/export
+    asignacion_info = serializers.SerializerMethodField()
     marca = serializers.CharField(source="asignacion.marca", read_only=True)
     tecnologia = serializers.CharField(source="asignacion.tecnologia", read_only=True)
     direccion = serializers.CharField(source="asignacion.direccion", read_only=True)
     comuna = serializers.CharField(source="asignacion.comuna", read_only=True)
     fecha = serializers.DateField(source="asignacion.fecha", read_only=True)
     bloque = serializers.CharField(source="asignacion.reagendado_bloque", read_only=True)
+
+    def get_asignacion_info(self, obj):
+        a = obj.asignacion
+        if not a:
+            return None
+        return {
+            "id": a.id,
+            "direccion": a.direccion,
+            "comuna": a.comuna,
+            "fecha": a.fecha.isoformat() if a.fecha else None,
+            "estado": a.estado,
+            "asignado_a": a.asignado_a_id,
+        }
 
     class Meta:
         model = HistorialAsignacion
@@ -86,58 +84,8 @@ class HistorialAsignacionSerializer(serializers.ModelSerializer):
             "bloque",
         ]
 
-    def get_asignacion_info(self, obj):
-        a = obj.asignacion
-        if not a:
-            return None
-        return {
-            "id": a.id,
-            "direccion": a.direccion,
-            "comuna": a.comuna,
-            "fecha": a.fecha,
-            "estado": a.estado,
-            "asignado_a": getattr(a.asignado_a, "id", None),
-        }
 
-
-# ---- Serializers para acciones de ViewSet (para que el UI de DRF muestre formularios) ----
-
-class AsignarmeActionSerializer(serializers.Serializer):
-    """
-    No requiere campos, es solo para que el UI de DRF muestre un POST “bonito”.
-    """
-    pass
-
-
-class EstadoClienteActionSerializer(serializers.Serializer):
-    """
-    Formulario Q5: opciones + validación condicional.
-    """
-    ESTADO_CHOICES = (
-        ("autoriza", "Autoriza a ingresar"),
-        ("sin_moradores", "Sin moradores"),
-        ("rechaza", "Rechaza"),
-        ("contingencia", "Contingencia externa"),
-        ("masivo", "Incidencia Masivo ClaroVTR"),
-        ("reagendo", "Reagendó"),
-    )
-    BLOQUE_CHOICES = (
-        ("10-13", "10:00 a 13:00"),
-        ("14-18", "14:00 a 18:00"),
-    )
-
-    estado_cliente = serializers.ChoiceField(choices=ESTADO_CHOICES)
-    reagendado_fecha = serializers.DateField(required=False, allow_null=True)
-    reagendado_bloque = serializers.ChoiceField(required=False, allow_null=True, choices=BLOQUE_CHOICES)
-
-    def validate(self, attrs):
-        if attrs.get("estado_cliente") == "reagendo":
-            if not attrs.get("reagendado_fecha") or not attrs.get("reagendado_bloque"):
-                raise serializers.ValidationError("Debe indicar fecha y bloque para reagendar.")
-        return attrs
-
-
-# ---- Serializers para carga de archivos (se usan en el endpoint cargar_csv) ----
+# === Apoyo para carga CSV/XLSX (interfaz de OpenAPI) ===
 
 class CsvRowResult(serializers.Serializer):
     rownum = serializers.IntegerField()
@@ -147,4 +95,39 @@ class CsvRowResult(serializers.Serializer):
 
 
 class CargaCSVSerializer(serializers.Serializer):
-    file = serializers.FileField()
+    file = serializers.FileField(help_text="Archivo .csv o .xlsx")
+
+
+# === Acciones (formularios simples para el navegador de DRF) ===
+
+class AsignarmeActionSerializer(serializers.Serializer):
+    """
+    Solo para que el navegador de DRF muestre un botón/form de POST.
+    """
+    confirm = serializers.BooleanField(required=False, default=True)
+
+
+class EstadoClienteActionSerializer(serializers.Serializer):
+    """
+    Q5: sólo escoger la opción. Si elige 'Reagendó', la API redirige
+    (303 See Other) a /estado_cliente/reagendar donde se exige fecha/bloque.
+    """
+    ESTADOS = [
+        ("autoriza", "Autoriza a ingresar"),
+        ("sin_moradores", "Sin Moradores"),
+        ("rechaza", "Rechaza"),
+        ("contingencia", "Contingencia externa"),
+        ("masivo", "Incidencia Masivo ClaroVTR"),
+        ("reagendo", "Reagendó"),
+    ]
+    estado_cliente = serializers.ChoiceField(choices=ESTADOS, write_only=True)
+
+
+class ReagendarActionSerializer(serializers.Serializer):
+    """
+    Formulario dedicado a reagendamiento.
+    """
+    reagendado_fecha = serializers.DateField(help_text="YYYY-MM-DD (futuro)")
+    reagendado_bloque = serializers.ChoiceField(
+        choices=[("10-13", "10:00 a 13:00"), ("14-18", "14:00 a 18:00")]
+    )
