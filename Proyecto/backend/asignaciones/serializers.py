@@ -1,54 +1,65 @@
-from datetime import date
-from django.utils import timezone
+# asignaciones/serializers.py
 from rest_framework import serializers
-
+from usuarios.models import Usuario
 from .models import DireccionAsignada, HistorialAsignacion
 
+# ---- Serializers base ----
 
 class DireccionAsignadaSerializer(serializers.ModelSerializer):
-    """Serializer principal de la visita/asignación."""
+    asignado_a = serializers.PrimaryKeyRelatedField(
+        queryset=Usuario.objects.filter(rol="tecnico"),
+        required=False,
+        allow_null=True
+    )
+
     class Meta:
         model = DireccionAsignada
         fields = [
-            "id", "fecha", "tecnologia", "marca",
-            "rut_cliente", "id_vivienda", "direccion", "comuna",
-            "zona", "encuesta", "id_qualtrics",
+            "id",
+            "fecha",
+            "tecnologia",
+            "marca",
+            "rut_cliente",
+            "id_vivienda",
+            "direccion",
+            "comuna",
+            "zona",
+            "encuesta",
+            "id_qualtrics",
             "estado",
-            "reagendado_fecha", "reagendado_bloque",
-            "created_at", "updated_at",
+            "reagendado_fecha",
+            "reagendado_bloque",
+            "created_at",
+            "updated_at",
             "asignado_a",
         ]
-        # El técnico NO puede mover la asignación por API; admin lo hace en Admin.
-        read_only_fields = ["created_at", "updated_at", "asignado_a"]
+        read_only_fields = ["created_at", "updated_at"]
 
-    def validate_fecha(self, value):
-        # Permitir null (pendiente sin fecha), pero si viene, no puede ser pasada
-        if value and value < timezone.localdate():
-            raise serializers.ValidationError("La fecha no puede ser pasada.")
-        return value
-
-    def validate(self, attrs):
-        # Normalizaciones simples
-        z = attrs.get("zona")
-        if z:
-            attrs["zona"] = z.upper()
-        m = attrs.get("marca")
-        if m:
-            attrs["marca"] = m.upper()
-        t = attrs.get("tecnologia")
-        if t:
-            attrs["tecnologia"] = t.upper()
-        e = attrs.get("encuesta")
-        if e:
-            attrs["encuesta"] = e.lower()
-        return attrs
+    def get_fields(self):
+        """
+        Para técnicos:
+          - estado: read-only (solo se cambia por /estado_cliente/)
+          - reagendado_*: read-only (solo se cambia por /estado_cliente/ cuando es reagendo)
+          - asignado_a: read-only (técnico no reasigna a otros)
+        Admin mantiene edición completa.
+        """
+        fields = super().get_fields()
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or getattr(user, "rol", None) != "administrador":
+            for name in ("estado", "reagendado_fecha", "reagendado_bloque", "asignado_a"):
+                if name in fields:
+                    fields[name].read_only = True
+        return fields
 
 
 class HistorialAsignacionSerializer(serializers.ModelSerializer):
-    usuario_email = serializers.SerializerMethodField()
+    usuario_id = serializers.IntegerField(source="usuario.id", read_only=True)
+    usuario_email = serializers.EmailField(source="usuario.email", read_only=True)
+    asignacion_id = serializers.IntegerField(source="asignacion.id", read_only=True)
     asignacion_info = serializers.SerializerMethodField()
 
-    # Campos “derivados” desde la asignación para filtros/reportes
+    # “Columnas” denormalizadas útiles para filtros/export
     marca = serializers.CharField(source="asignacion.marca", read_only=True)
     tecnologia = serializers.CharField(source="asignacion.tecnologia", read_only=True)
     direccion = serializers.CharField(source="asignacion.direccion", read_only=True)
@@ -59,15 +70,21 @@ class HistorialAsignacionSerializer(serializers.ModelSerializer):
     class Meta:
         model = HistorialAsignacion
         fields = [
-            "id", "accion", "detalles", "created_at",
-            "usuario_id", "usuario_email",
-            "asignacion_id", "asignacion_info",
-            # derivados
-            "marca", "tecnologia", "direccion", "comuna", "fecha", "bloque",
+            "id",
+            "accion",
+            "detalles",
+            "created_at",
+            "usuario_id",
+            "usuario_email",
+            "asignacion_id",
+            "asignacion_info",
+            "marca",
+            "tecnologia",
+            "direccion",
+            "comuna",
+            "fecha",
+            "bloque",
         ]
-
-    def get_usuario_email(self, obj):
-        return getattr(obj.usuario, "email", None)
 
     def get_asignacion_info(self, obj):
         a = obj.asignacion
@@ -79,9 +96,48 @@ class HistorialAsignacionSerializer(serializers.ModelSerializer):
             "comuna": a.comuna,
             "fecha": a.fecha,
             "estado": a.estado,
-            "asignado_a": a.asignado_a_id,
+            "asignado_a": getattr(a.asignado_a, "id", None),
         }
 
+
+# ---- Serializers para acciones de ViewSet (para que el UI de DRF muestre formularios) ----
+
+class AsignarmeActionSerializer(serializers.Serializer):
+    """
+    No requiere campos, es solo para que el UI de DRF muestre un POST “bonito”.
+    """
+    pass
+
+
+class EstadoClienteActionSerializer(serializers.Serializer):
+    """
+    Formulario Q5: opciones + validación condicional.
+    """
+    ESTADO_CHOICES = (
+        ("autoriza", "Autoriza a ingresar"),
+        ("sin_moradores", "Sin moradores"),
+        ("rechaza", "Rechaza"),
+        ("contingencia", "Contingencia externa"),
+        ("masivo", "Incidencia Masivo ClaroVTR"),
+        ("reagendo", "Reagendó"),
+    )
+    BLOQUE_CHOICES = (
+        ("10-13", "10:00 a 13:00"),
+        ("14-18", "14:00 a 18:00"),
+    )
+
+    estado_cliente = serializers.ChoiceField(choices=ESTADO_CHOICES)
+    reagendado_fecha = serializers.DateField(required=False, allow_null=True)
+    reagendado_bloque = serializers.ChoiceField(required=False, allow_null=True, choices=BLOQUE_CHOICES)
+
+    def validate(self, attrs):
+        if attrs.get("estado_cliente") == "reagendo":
+            if not attrs.get("reagendado_fecha") or not attrs.get("reagendado_bloque"):
+                raise serializers.ValidationError("Debe indicar fecha y bloque para reagendar.")
+        return attrs
+
+
+# ---- Serializers para carga de archivos (se usan en el endpoint cargar_csv) ----
 
 class CsvRowResult(serializers.Serializer):
     rownum = serializers.IntegerField()
@@ -92,24 +148,3 @@ class CsvRowResult(serializers.Serializer):
 
 class CargaCSVSerializer(serializers.Serializer):
     file = serializers.FileField()
-
-
-# ====== Serializer para mostrar un formulario de export en el Browsable API ======
-class HistorialExportSerializer(serializers.Serializer):
-    format = serializers.ChoiceField(choices=[("csv", "CSV"), ("xlsx", "XLSX")], default="csv")
-    # mismos filtros que el listado
-    estado = serializers.CharField(required=False, allow_blank=True)
-    marca = serializers.CharField(required=False, allow_blank=True)
-    tecnologia = serializers.CharField(required=False, allow_blank=True)
-    comuna = serializers.CharField(required=False, allow_blank=True)
-    zona = serializers.CharField(required=False, allow_blank=True)
-    encuesta = serializers.CharField(required=False, allow_blank=True)
-    tecnico_id = serializers.IntegerField(required=False)
-    desde = serializers.CharField(required=False, allow_blank=True, help_text="YYYY-MM-DD o HOY")
-    hasta = serializers.CharField(required=False, allow_blank=True, help_text="YYYY-MM-DD o HOY")
-    creado_desde = serializers.CharField(required=False, allow_blank=True, help_text="YYYY-MM-DD o HOY")
-    creado_hasta = serializers.CharField(required=False, allow_blank=True, help_text="YYYY-MM-DD o HOY")
-    ordering = serializers.ChoiceField(
-        choices=[("created_at", "created_at ↑"), ("-created_at", "created_at ↓"), ("id", "id ↑"), ("-id", "id ↓")],
-        required=False
-    )
