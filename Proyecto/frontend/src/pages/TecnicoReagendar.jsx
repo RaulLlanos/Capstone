@@ -29,6 +29,7 @@ export default function TecnicoReagendar() {
   const [fieldErrors, setFieldErrors] = useState({});
   const [saving, setSaving] = useState(false);
   const fetchId = useRef(0);
+  const [sourceIsMine, setSourceIsMine] = useState(false);
 
   const [form, setForm] = useState({
     asignacion_id: "",   // string (id)
@@ -43,9 +44,10 @@ export default function TecnicoReagendar() {
     setError("");
     const myFetch = ++fetchId.current;
     try {
-      const res = await api.get("/api/asignaciones/mias/");
+      const res = await api.get("/api/asignaciones/");
       if (myFetch !== fetchId.current) return;
       setAsignaciones(normalizeList(res.data));
+      setSourceIsMine(true);
     } catch (e) {
       console.error(e);
       setError("No se pudieron cargar tus asignaciones.");
