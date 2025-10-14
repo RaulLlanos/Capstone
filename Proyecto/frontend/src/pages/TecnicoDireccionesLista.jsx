@@ -5,7 +5,7 @@ import styles from "./Login.module.css";
 import { useAuth } from "../context/AuthContext";
 
 const LIST_ENDPOINT = "/api/asignaciones/";
-const ACTION_POST = (id) => `/api/asignaciones/${id}/`;
+const ACTION_POST = (id) => `/api/asignaciones/${id}/asignarme/`;
 const ACTION_PATCH = (id) => `/api/asignaciones/${id}/`;
 
 const MARCAS = ["CLARO", "VTR"];
