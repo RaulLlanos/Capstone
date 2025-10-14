@@ -3,6 +3,7 @@ from datetime import datetime
 import csv
 import io
 import re
+import unicodedata
 from typing import List, Dict, Any
 
 from django.db import transaction
@@ -29,13 +30,14 @@ from .serializers import (
     HistorialAsignacionSerializer,
     CsvRowResult,
     CargaCSVSerializer,
+    AsignarmeActionSerializer,
+    EstadoClienteActionSerializer,
 )
 
-# === Notificaciones (envío real por SMTP) ===
 from core.models import Notificacion
-from core.notify import enviar_notificacion_real
 
-# ---------- Helpers para importar archivos ----------
+
+# -------- Helpers de normalización / parsing --------
 
 _HEADER_ALIASES = {
     "rut_cliente": ["rut_cliente", "rut", "rut cliente"],
@@ -72,6 +74,7 @@ def _norm(s: str) -> str:
     s = re.sub(r"\s+", " ", s).replace(" ", "_")
     return s
 
+
 def _s(val) -> str:
     if val is None:
         return ""
@@ -79,6 +82,7 @@ def _s(val) -> str:
         return str(val).strip()
     except Exception:
         return ""
+
 
 def _build_header_map(raw_headers: List[str]) -> Dict[str, str]:
     norm_headers = { _norm(h): h for h in raw_headers }
@@ -90,6 +94,7 @@ def _build_header_map(raw_headers: List[str]) -> Dict[str, str]:
                 mapping[canon] = norm_headers[k]
                 break
     return mapping
+
 
 def _parse_date(val):
     if not val:
@@ -107,6 +112,7 @@ def _parse_date(val):
             pass
     return None
 
+
 def _normalize_bloque(val: str) -> str | None:
     v = _s(val).lower()
     if not v:
@@ -119,6 +125,7 @@ def _normalize_bloque(val: str) -> str | None:
         return v
     return None
 
+
 def _header_score(names_norm: List[str]) -> int:
     score = 0
     have = set(names_norm)
@@ -129,12 +136,14 @@ def _header_score(names_norm: List[str]) -> int:
             score += 1
     return score
 
+
 def _rows_from_csv(f) -> List[Dict[str, Any]]:
     data = f.read().decode("utf-8", errors="ignore")
     reader = csv.DictReader(io.StringIO(data))
     headers = list(reader.fieldnames or [])
     header_map = _build_header_map(headers)
     return [(header_map, r) for r in reader]
+
 
 def _rows_from_xlsx(f) -> List[Dict[str, Any]]:
     wb = load_workbook(filename=io.BytesIO(f.read()), data_only=True)
@@ -161,20 +170,82 @@ def _rows_from_xlsx(f) -> List[Dict[str, Any]]:
         rows.append((header_map, r))
     return rows
 
+
 def _canon_get(row: Dict[str, Any], header_map: Dict[str, str], key: str) -> Any:
     src = header_map.get(key)
     return row.get(src) if src else None
+
+
+def _norm_ec(s: str) -> str:
+    s = (str(s) if s is not None else "").strip().lower()
+    s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+    s = re.sub(r"[^a-z0-9]+", "_", s)
+    return s.strip("_")
+
+
+def _parse_estado_cliente_from_request(data: Dict[str, Any]) -> str | None:
+    """
+    Devuelve la clave canónica: autoriza | sin_moradores | rechaza | contingencia | masivo | reagendo
+    Acepta:
+      - campos: estado_cliente | estado | q5 | accion
+      - sinónimos/acentos: reagenda, reagendó, reagendada, reagendado
+      - códigos numéricos: 1..6 (1=autoriza, 6=reagendo)
+    """
+    raw = (
+        data.get("estado_cliente", None)
+        or data.get("estado", None)
+        or data.get("q5", None)
+        or data.get("accion", None)
+        or ""
+    )
+
+    # número 1..6
+    try:
+        num = int(str(raw).strip())
+    except Exception:
+        num = None
+
+    if num is not None:
+        num_map = {
+            1: "autoriza",
+            2: "sin_moradores",
+            3: "rechaza",
+            4: "contingencia",
+            5: "masivo",
+            6: "reagendo",
+        }
+        return num_map.get(num)
+
+    key = _norm_ec(raw)
+    synonyms = {
+        "autoriza": "autoriza",
+        "sin_moradores": "sin_moradores",
+        "sinmoradores": "sin_moradores",
+        "rechaza": "rechaza",
+        "contingencia": "contingencia",
+        "masivo": "masivo",
+        # familia reagendar
+        "reagendo": "reagendo",
+        "reagenda": "reagendo",
+        "reagendada": "reagendo",
+        "reagendado": "reagendo",
+    }
+    if key == "reagendo":
+        return "reagendo"
+    return synonyms.get(key)
+
 
 # ---------------------------------------------------
 
 class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     """
     - Administrador: CRUD total + carga CSV/XLSX + reasignar/desasignar.
-    - Técnico: lectura + acción POST /estado_cliente/ y /asignarme/.
+    - Técnico: lectura + acciones POST (/asignarme, /estado_cliente).
     """
     queryset = DireccionAsignada.objects.all().order_by("-created_at")
     serializer_class = DireccionAsignadaSerializer
     permission_classes = [IsAuthenticated, AdminFull_TechReadOnlyPlusActions]
+    tech_allowed_actions = {"asignarme", "estado_cliente"}
 
     filterset_fields = ["estado", "comuna", "zona", "marca", "tecnologia", "encuesta", "asignado_a"]
     search_fields = ["direccion", "comuna", "rut_cliente", "id_vivienda"]
@@ -206,37 +277,44 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
         return qs
 
-    # ---------- Acción: ASIGNARME (técnico) ----------
-    @action(detail=True, methods=["post"], url_path="asignarme")
+    # ---------- ASIGNARME (técnico) ----------
+    @extend_schema(request=AsignarmeActionSerializer)
+    @action(detail=True, methods=["get", "post"], url_path="asignarme", serializer_class=AsignarmeActionSerializer)
     def asignarme(self, request, pk=None):
-        """
-        Permite al TÉCNICO autenticado asignarse una visita libre.
-        - Si ya está asignada a otro técnico -> 409.
-        - Si ya está asignada al mismo técnico -> 200 (idempotente).
-        - Cambia estado a ASIGNADA y registra historial.
-        """
-        u = request.user
-        if getattr(u, "rol", None) != "tecnico":
-            return Response({"detail": "Solo técnicos pueden usar esta acción."}, status=403)
-
         obj = self.get_object()
+        u = request.user
+
+        if request.method == "GET":
+            return Response({
+                "ayuda": "Haz POST para asignarte esta visita.",
+                "restricciones": [
+                    "Solo técnicos pueden asignarse.",
+                    "No se puede asignar una visita VISITADA o CANCELADA.",
+                    "Si ya está asignada a otro técnico, devuelve 409.",
+                ]
+            })
+
+        # POST
+        if getattr(u, "rol", None) != "tecnico":
+            return Response({"detail": "Solo técnicos pueden asignarse visitas."}, status=403)
+
+        if obj.estado in {"VISITADA", "CANCELADA"}:
+            return Response({"detail": "No se puede asignar una visita ya finalizada/cancelada."}, status=409)
 
         if obj.asignado_a_id and obj.asignado_a_id != u.id:
             return Response({"detail": "La visita ya está asignada a otro técnico."}, status=409)
 
-        with transaction.atomic():
-            obj.asignado_a_id = u.id
-            if obj.estado in {"PENDIENTE", "REAGENDADA", "CANCELADA"}:
-                obj.estado = "ASIGNADA"
-            obj.save(update_fields=["asignado_a", "estado", "updated_at"])
+        obj.asignado_a_id = u.id
+        if obj.estado == "PENDIENTE":
+            obj.estado = "ASIGNADA"
+        obj.save(update_fields=["asignado_a", "estado", "updated_at"])
 
-            HistorialAsignacion.objects.create(
-                asignacion=obj,
-                accion="asignada",
-                detalles=f"El técnico {u.email} se asignó la visita.",
-                usuario=u,
-            )
-
+        HistorialAsignacion.objects.create(
+            asignacion=obj,
+            accion="ASIGNADA",
+            detalles=f"Asignada a {u.email}.",
+            usuario=u,
+        )
         return Response(self.get_serializer(obj).data)
 
     # ---------- HISTORIAL ----------
@@ -267,12 +345,12 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         if zona: qs = qs.filter(asignacion__zona=zona)
         if encuesta: qs = qs.filter(asignacion__encuesta=encuesta)
 
-        # Rango por fecha de asignación
+        # Rango por fecha de asignación (atajo HOY)
         desde = request.query_params.get("fecha_after") or request.query_params.get("desde")
         hasta = request.query_params.get("fecha_before") or request.query_params.get("hasta")
         hoy = timezone.localdate().isoformat()
-        if desde and str(desde).upper() == "HOY": desde = hoy
-        if hasta and str(hasta).upper() == "HOY": hasta = hoy
+        if desde and desde.upper() == "HOY": desde = hoy
+        if hasta and hasta.upper() == "HOY": hasta = hoy
         if desde: qs = qs.filter(asignacion__fecha__gte=desde)
         if hasta: qs = qs.filter(asignacion__fecha__lte=hasta)
 
@@ -281,31 +359,30 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         s = HistorialAsignacionSerializer(page or qs, many=True)
         return self.get_paginated_response(s.data) if page is not None else Response(s.data)
 
-    @action(detail=False, methods=["get"], url_path="historial/export")
+    @action(detail=False, methods=["post"], url_path="historial/export")
     def historial_export(self, request):
         u = request.user
         if getattr(u, "rol", None) != "administrador":
             return Response({"detail": "Solo administrador puede exportar historial."}, status=403)
 
-        p = request.query_params
         qs = HistorialAsignacion.objects.select_related("asignacion", "usuario").all()
+        p = self.request.query_params
+        if p.get("estado"): qs = qs.filter(asignacion__estado=p["estado"])
+        if p.get("marca"): qs = qs.filter(asignacion__marca=p["marca"])
+        if p.get("tecnologia"): qs = qs.filter(asignacion__tecnologia=p["tecnologia"])
+        if p.get("comuna"): qs = qs.filter(asignacion__comuna=p["comuna"])
+        if p.get("zona"): qs = qs.filter(asignacion__zona=p["zona"])
+        if p.get("encuesta"): qs = qs.filter(asignacion__encuesta=p["encuesta"])
 
-        # mismos filtros que /historial
-        estado = p.get("estado")
-        if estado: qs = qs.filter(asignacion__estado=estado)
-        for k, fk in [("marca","asignacion__marca"), ("tecnologia","asignacion__tecnologia"),
-                      ("comuna","asignacion__comuna"), ("zona","asignacion__zona"), ("encuesta","asignacion__encuesta")]:
-            v = p.get(k)
-            if v: qs = qs.filter(**{fk: v})
         desde = p.get("fecha_after") or p.get("desde")
         hasta = p.get("fecha_before") or p.get("hasta")
         hoy = timezone.localdate().isoformat()
-        if desde and str(desde).upper() == "HOY": desde = hoy
-        if hasta and str(hasta).upper() == "HOY": hasta = hoy
+        if desde and desde.upper() == "HOY": desde = hoy
+        if hasta and hasta.upper() == "HOY": hasta = hoy
         if desde: qs = qs.filter(asignacion__fecha__gte=desde)
         if hasta: qs = qs.filter(asignacion__fecha__lte=hasta)
 
-        fmt = (p.get("format") or "xlsx").lower()
+        fmt = (request.data or {}).get("format", "xlsx").lower()
         qs = qs.order_by("asignacion_id", "created_at", "id")
 
         if fmt == "csv":
@@ -453,7 +530,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             if was_created:
                 HistorialAsignacion.objects.create(
                     asignacion=obj,
-                    accion="creada",
+                    accion="CREADA",
                     detalles=f"Creada por carga XLS/CSV. {'Asignada a ' + asignado.email if asignado else 'Sin técnico'}",
                     usuario=request.user,
                 )
@@ -461,7 +538,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             else:
                 HistorialAsignacion.objects.create(
                     asignacion=obj,
-                    accion="editada",
+                    accion="EDITADA",
                     detalles="Actualizada por carga XLS/CSV.",
                     usuario=request.user,
                 )
@@ -490,34 +567,46 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         obj.save()
         HistorialAsignacion.objects.create(
             asignacion=obj,
-            accion="asignacion_eliminada",
+            accion="ASIGNACION_ELIMINADA",
             detalles="Desasignada por administrador.",
             usuario=request.user,
         )
         return Response(self.get_serializer(obj).data)
 
     # ---------- ESTADO DEL CLIENTE (Q5) ----------
-    @action(detail=True, methods=["post"], url_path="estado_cliente")
+    @extend_schema(
+    request=EstadoClienteActionSerializer,
+    responses=DireccionAsignadaSerializer,
+)
+    @action(detail=True, methods=["get", "post"], url_path="estado_cliente", serializer_class=EstadoClienteActionSerializer)
     def estado_cliente(self, request, pk=None):
         """
-        Q5 Estado del Cliente:
-        - autoriza -> VISITADA
-        - sin_moradores | rechaza | contingencia | masivo -> CANCELADA
-        - reagendo -> requiere fecha/bloque -> REAGENDADA + notificación real por email
+        Q5 Estado del Cliente (acepta sinónimos/códigos):
+        1/autoriza               -> VISITADA
+        2/sin_moradores          -> CANCELADA
+        3/rechaza                -> CANCELADA
+        4/contingencia           -> CANCELADA
+        5/masivo                 -> CANCELADA
+        6/reagendo (reagendó/reagendada/reagenda) -> requiere fecha/bloque -> REAGENDADA + notificación en cola
         """
         obj = self.get_object()
-        data = request.data or {}
-        estado_cliente = (data.get("estado_cliente") or "").strip().lower()
 
-        valid = {"autoriza", "sin_moradores", "rechaza", "contingencia", "masivo", "reagendo"}
-        if estado_cliente not in valid:
+        if request.method == "GET":
+            # El UI de DRF mostrará el formulario del serializer; devolvemos hints opcionales
+            return Response({
+                "ayuda": "Completa el formulario y haz POST para registrar el resultado de la visita.",
+                "nota": "Si eliges 'Reagendó' debes indicar fecha y bloque.",
+            })
+
+        data = request.data or {}
+        canonical = _parse_estado_cliente_from_request(data)
+        if canonical is None:
             return Response({"detail": "estado_cliente inválido."}, status=400)
 
         with transaction.atomic():
-            if estado_cliente == "autoriza":
+            if canonical == "autoriza":
                 obj.estado = "VISITADA"
                 obj.save(update_fields=["estado", "updated_at"])
-
                 HistorialAsignacion.objects.create(
                     asignacion=obj,
                     accion="ESTADO_CLIENTE",
@@ -525,14 +614,13 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                     usuario=request.user,
                 )
 
-            elif estado_cliente in {"sin_moradores", "rechaza", "contingencia", "masivo"}:
+            elif canonical in {"sin_moradores", "rechaza", "contingencia", "masivo"}:
                 obj.estado = "CANCELADA"
                 obj.save(update_fields=["estado", "updated_at"])
-
                 HistorialAsignacion.objects.create(
                     asignacion=obj,
                     accion="ESTADO_CLIENTE",
-                    detalles=f"Estado cliente = {estado_cliente} (asignación CANCELADA).",
+                    detalles=f"Estado cliente = {canonical} (asignación CANCELADA).",
                     usuario=request.user,
                 )
 
@@ -540,16 +628,16 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                 f = data.get("reagendado_fecha")
                 b = data.get("reagendado_bloque")
                 if not f or not b:
-                    return Response({"estado_cliente": ["Este campo es requerido."], "detail": "Debe indicar fecha y bloque."}, status=400)
-
-                # Validación de fecha futura
+                    return Response(
+                        {"estado_cliente": ["Este campo es requerido."],
+                        "detail": "Debe indicar fecha (YYYY-MM-DD) y bloque (10-13|14-18)."},
+                        status=400,
+                    )
                 if str(f) < str(timezone.localdate()):
                     return Response({"detail": "La fecha reagendada no puede ser pasada."}, status=400)
-
                 if b not in {"10-13", "14-18"}:
                     return Response({"detail": "Bloque inválido (use 10-13 o 14-18)."}, status=400)
 
-                # actualizar asignación
                 obj.reagendado_fecha = f
                 obj.reagendado_bloque = b
                 obj.estado = "REAGENDADA"
@@ -562,14 +650,13 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                     usuario=request.user,
                 )
 
-                # Notificación real por email (registra y envía)
-                destino = getattr(obj.asignado_a, "email", "") or ""
-                notif = Notificacion.objects.create(
+                # Encolamos notificación (envío real cuando configures SMTP con core/notify.py)
+                Notificacion.objects.create(
+                    tipo="reagendo",
                     asignacion=obj,
-                    canal=Notificacion.Canal.EMAIL,
-                    tipo="reagendamiento",
-                    destino=destino,
-                    asunto=f"Reagendamiento Asignación #{obj.id}",
+                    canal=Notificacion.Canal.NONE,
+                    destino="",
+                    provider="",
                     payload={
                         "asignacion_id": obj.id,
                         "direccion": obj.direccion,
@@ -577,22 +664,15 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                         "reagendado_fecha": str(f),
                         "reagendado_bloque": b,
                         "tecnico_id": getattr(request.user, "id", None),
-                        "tecnico_email": getattr(request.user, "email", None),
                     },
-                    status=Notificacion.Estado.PENDING,
+                    status=Notificacion.Estado.QUEUED,
                 )
-                enviar_notificacion_real(notif)
 
-        return Response(self.get_serializer(obj).data)
+        # ⚠️ Importante: responder con el serializer de la asignación, NO con el de la acción
+        serializer = DireccionAsignadaSerializer(obj, context={"request": request})
+        return Response(serializer.data)
 
-    # ---------- Proteger borrado de VISITADAS ----------
-    def destroy(self, request, *args, **kwargs):
-        obj = self.get_object()
-        if obj.estado == "VISITADA":
-            return Response({"detail": "No se puede eliminar una visita con estado VISITADA."}, status=403)
-        return super().destroy(request, *args, **kwargs)
-
-    # ---------- MÉTRICAS (resumen/tecnico) ----------
+    # ---------- MÉTRICAS ----------
     @action(detail=False, methods=["get"], url_path="metrics/resumen")
     def metrics_resumen(self, request):
         qs = DireccionAsignada.objects.all()
@@ -655,14 +735,13 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             "pct_reagendadas": pct(reag),
         })
 
-    # ---------- MÉTRICAS: EXPORT (CSV/XLSX, solo admin) ----------
-    @action(detail=False, methods=["get"], url_path="metrics/export")
+    @action(detail=False, methods=["post"], url_path="metrics/export")
     def metrics_export(self, request):
         if getattr(request.user, "rol", None) != "administrador":
             return Response({"detail": "Solo administrador puede exportar métricas."}, status=403)
 
         resumen = self.metrics_resumen(request).data
-        fmt = (request.query_params.get("format") or "xlsx").lower()
+        fmt = (request.data or {}).get("format", "xlsx").lower()
 
         if fmt == "csv":
             buff = io.StringIO()
@@ -692,13 +771,8 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         resp["Content-Disposition"] = 'attachment; filename="metricas_resumen.xlsx"'
         return resp
 
-    # ---------- MÉTRICAS: SERIE (datos listos para gráficos) ----------
     @action(detail=False, methods=["get"], url_path="metrics/serie")
     def metrics_serie(self, request):
-        """
-        Devuelve serie por día para Visitadas, Reagendadas y Canceladas
-        (según filtros de fecha/zona/tecnico/etc.) usando asignacion.fecha.
-        """
         qs = DireccionAsignada.objects.all()
         p = request.query_params
 
@@ -730,3 +804,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             }
         }
         return Response(data)
+
+# ---------------------------------------------------
+
+
