@@ -94,7 +94,7 @@ TEMPLATES = [
     },
 ]
 
-# === Base de datos ===
+# === Base de datos (Supabase / dj_database_url) ===
 DATABASES = {
     "default": dj_database_url.config(
         env="DATABASE_URL",
@@ -129,7 +129,6 @@ SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
     "AUTH_HEADER_TYPES": ("Bearer",),
-    # sin ROTATE_REFRESH_TOKENS / sin BLACKLIST_AFTER_ROTATION
 }
 
 # === Cookies para JWT HttpOnly ===
@@ -172,7 +171,6 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
 }
 
-
 # === Hash de contraseñas (bcrypt primero) ===
 PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.BCryptSHA256PasswordHasher",
@@ -210,35 +208,26 @@ else:
     CSRF_COOKIE_SECURE = False
     JWT_COOKIE_SECURE = False
 
-# # === Email real (SMTP) ===
-# EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-# EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.sendgrid.net")  # o tu SMTP
-# EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
-# EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")         # ej: "apikey" en SendGrid
-# EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "") # tu API key / password SMTP
-# EMAIL_USE_TLS = True
-# DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "no-reply@claro-vtr.local")
-
-# # Correos que también recibirán copia de notificación de reagendo (opcional)
-# NOTIFY_ADMIN_EMAILS = [
-#     e.strip() for e in os.environ.get("NOTIFY_ADMIN_EMAILS", "").split(",") if e.strip()
-# ]
-
-# === Email (SMTP) ===
+# =========================================================
+# === Email / Notificaciones (SMTP) — configuración única
+# =========================================================
+# Usa variables de entorno en .env; si falta algo, hay defaults seguros.
+# Email (SMTP)
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = os.environ.get("EMAIL_HOST", "")          # p.ej. "smtp.gmail.com"
-EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))  # 587 TLS, 465 SSL
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
 EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "1") == "1"
 EMAIL_USE_SSL = os.environ.get("EMAIL_USE_SSL", "0") == "1"
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "no-reply@localhost")
 
-# Correos que reciben copia de todas las notificaciones salientes (opcional)
+# Correos que reciben copia de todas las notificaciones
 NOTIFY_ADMIN_EMAILS = [
     e.strip() for e in os.environ.get("NOTIFY_ADMIN_EMAILS", "").split(",") if e.strip()
 ]
 
-# En desarrollo puedes forzar consola para ver el correo impreso en terminal:
+# Forzar impresión a consola en dev (opcional)
 if not IS_PROD and os.environ.get("EMAIL_CONSOLE", "0") == "1":
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+

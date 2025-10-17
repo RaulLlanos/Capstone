@@ -1,3 +1,4 @@
+# asignaciones/views.py
 from datetime import datetime
 import csv
 import io
@@ -5,6 +6,7 @@ import re
 import unicodedata
 from typing import List, Dict, Any
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Case, When, Value, IntegerField, Q, Count
 from django.db.models.functions import TruncDate
@@ -31,10 +33,10 @@ from .serializers import (
     CargaCSVSerializer,
     AsignarmeActionSerializer,
     EstadoClienteActionSerializer,
-    ReagendarActionSerializer,
 )
 
 from core.models import Notificacion
+from core.notify import send_email
 
 
 # -------- Helpers de normalización / parsing --------
@@ -241,12 +243,12 @@ def _parse_estado_cliente_from_request(data: Dict[str, Any]) -> str | None:
 class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     """
     - Administrador: CRUD total + carga CSV/XLSX + reasignar/desasignar.
-    - Técnico: lectura + acciones POST (/asignarme, /estado_cliente, /estado_cliente/reagendar).
+    - Técnico: lectura + acciones POST (/asignarme, /estado_cliente).
     """
     queryset = DireccionAsignada.objects.all().order_by("-created_at")
     serializer_class = DireccionAsignadaSerializer
     permission_classes = [IsAuthenticated, AdminFull_TechReadOnlyPlusActions]
-    tech_allowed_actions = {"asignarme", "estado_cliente", "estado_cliente_reagendar"}
+    tech_allowed_actions = {"asignarme", "estado_cliente"}
 
     filterset_fields = ["estado", "comuna", "zona", "marca", "tecnologia", "encuesta", "asignado_a"]
     search_fields = ["direccion", "comuna", "rut_cliente", "id_vivienda"]
@@ -406,7 +408,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                     h.created_at.isoformat(),
                 ])
             resp = HttpResponse(buff.getvalue(), content_type="text/csv; charset=utf-8")
-            resp["Content-Disposition"] = 'attachment; filename=\"historial.csv\"'
+            resp["Content-Disposition"] = 'attachment; filename="historial.csv"'
             return resp
 
         wb = Workbook()
@@ -431,7 +433,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         out = io.BytesIO()
         wb.save(out)
         resp = HttpResponse(out.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        resp["Content-Disposition"] = 'attachment; filename=\"historial.xlsx\"'
+        resp["Content-Disposition"] = 'attachment; filename="historial.xlsx"'
         return resp
 
     # === CARGA CSV/XLSX ===
@@ -575,170 +577,131 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         return Response(self.get_serializer(obj).data)
 
     # ---------- ESTADO DEL CLIENTE (Q5) ----------
-    # ---------- ESTADO DEL CLIENTE (Q5) ----------
-from django.db import transaction
-
-@extend_schema(request=EstadoClienteActionSerializer, responses=DireccionAsignadaSerializer)
-@action(detail=True, methods=["post"], url_path="estado_cliente", serializer_class=EstadoClienteActionSerializer)
-def estado_cliente(self, request, pk=None):
-    """
-    Q5 Estado del Cliente (acepta sinónimos/códigos):
-    1/autoriza               -> VISITADA
-    2/sin_moradores          -> CANCELADA
-    3/rechaza                -> CANCELADA
-    4/contingencia           -> CANCELADA
-    5/masivo                 -> CANCELADA
-    6/reagendo (reagendó/reagendada/reagenda) -> requiere fecha/bloque -> REAGENDADA + notificación en cola
-
-    NOTA: NO exige que el técnico esté asignado a la visita.
-    """
-    obj = self.get_object()
-    data = request.data or {}
-    canonical = _parse_estado_cliente_from_request(data)
-    if canonical is None:
-        return Response({"detail": "estado_cliente inválido."}, status=400)
-
-    with transaction.atomic():
-        if canonical == "autoriza":
-            obj.estado = "VISITADA"
-            obj.save(update_fields=["estado", "updated_at"])
-            HistorialAsignacion.objects.create(
-                asignacion=obj,
-                accion="ESTADO_CLIENTE",
-                detalles="Estado cliente = autoriza (asignación VISITADA).",
-                usuario=request.user,
-            )
-
-        elif canonical in {"sin_moradores", "rechaza", "contingencia", "masivo"}:
-            obj.estado = "CANCELADA"
-            obj.save(update_fields=["estado", "updated_at"])
-            HistorialAsignacion.objects.create(
-                asignacion=obj,
-                accion="ESTADO_CLIENTE",
-                detalles=f"Estado cliente = {canonical} (asignación CANCELADA).",
-                usuario=request.user,
-            )
-
-        else:  # reagendo
-            f = data.get("reagendado_fecha")
-            b = data.get("reagendado_bloque")
-            if not f or not b:
-                return Response(
-                    {"estado_cliente": ["Este campo es requerido."],
-                     "detail": "Debe indicar fecha (YYYY-MM-DD) y bloque (10-13|14-18)."},
-                    status=400,
-                )
-            # Validaciones mínimas
-            if str(f) < str(timezone.localdate()):
-                return Response({"detail": "La fecha reagendada no puede ser pasada."}, status=400)
-            if b not in {"10-13", "14-18"}:
-                return Response({"detail": "Bloque inválido (use 10-13 o 14-18)."}, status=400)
-
-            obj.reagendado_fecha = f
-            obj.reagendado_bloque = b
-            obj.estado = "REAGENDADA"
-            obj.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
-
-            HistorialAsignacion.objects.create(
-                asignacion=obj,
-                accion="REAGENDADA",
-                detalles=f"Reagendada desde auditoría a {f} {b}",
-                usuario=request.user,
-            )
-
-            # Encolamos notificación (envío real cuando configures SMTP con core/notify.py)
-            Notificacion.objects.create(
-                tipo="reagendo",
-                asignacion=obj,
-                canal=Notificacion.Canal.NONE,
-                destino="",
-                provider="",
-                payload={
-                    "asignacion_id": obj.id,
-                    "direccion": obj.direccion,
-                    "comuna": obj.comuna,
-                    "reagendado_fecha": str(f),
-                    "reagendado_bloque": b,
-                    "tecnico_id": getattr(request.user, "id", None),
-                    "tecnico_email": getattr(request.user, "email", ""),
-                },
-                status=Notificacion.Estado.QUEUED,
-            )
-
-    # Respondemos SIEMPRE con la asignación actualizada (no con el serializer de acción)
-    return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
-
-
-    # --- SUB-ENDPOINT PROPIO PARA REAGENDAR ---
-    @extend_schema(request=ReagendarActionSerializer, responses=DireccionAsignadaSerializer)
-    @action(
-        detail=True,
-        methods=["get", "post"],
-        url_path="estado_cliente/reagendar",
-        serializer_class=ReagendarActionSerializer,
+    @extend_schema(
+        request=EstadoClienteActionSerializer,
+        responses=DireccionAsignadaSerializer,
     )
-    def estado_cliente_reagendar(self, request, pk=None):
+    @action(detail=True, methods=["get", "post"], url_path="estado_cliente", serializer_class=EstadoClienteActionSerializer)
+    def estado_cliente(self, request, pk=None):
         """
-        Formulario dedicado para reagendar (fecha/bloque obligatorios).
-        - Técnicos: sólo si son el asignado de la visita (o si está sin asignar).
-        - Admin: siempre.
+        Q5 Estado del Cliente (acepta sinónimos/códigos):
+        1/autoriza               -> VISITADA
+        2/sin_moradores          -> CANCELADA
+        3/rechaza                -> CANCELADA
+        4/contingencia           -> CANCELADA
+        5/masivo                 -> CANCELADA
+        6/reagendo (reagendó/reagendada/reagenda) -> requiere fecha/bloque -> REAGENDADA + notificación email
         """
         obj = self.get_object()
-        user = request.user
 
         if request.method == "GET":
             return Response({
-                "ayuda": "Indica fecha (YYYY-MM-DD, futura) y bloque (10-13 o 14-18) y haz POST.",
-                "nota": "Este endpoint coloca la asignación en estado REAGENDADA.",
+                "ayuda": "Completa el formulario y haz POST para registrar el resultado de la visita.",
+                "nota": "Si eliges 'Reagendó' debes indicar fecha y bloque.",
             })
 
-        # Validar permisos: si es técnico, debe ser el asignado (o la visita sin asignar).
-        if getattr(user, "rol", None) == "tecnico":
-            if obj.asignado_a_id not in (None, user.id):
-                return Response({"detail": "No puedes reagendar una visita asignada a otro técnico."}, status=403)
-
-        # Validación por serializer
-        serializer = ReagendarActionSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        f = serializer.validated_data["reagendado_fecha"]
-        b = serializer.validated_data["reagendado_bloque"]
-
-        if f < timezone.localdate():
-            return Response({"detail": "La fecha reagendada no puede ser pasada."}, status=400)
+        data = request.data or {}
+        canonical = _parse_estado_cliente_from_request(data)
+        if canonical is None:
+            return Response({"detail": "estado_cliente inválido."}, status=400)
 
         with transaction.atomic():
-            obj.reagendado_fecha = f
-            obj.reagendado_bloque = b
-            obj.estado = "REAGENDADA"
-            obj.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
+            if canonical == "autoriza":
+                obj.estado = "VISITADA"
+                obj.save(update_fields=["estado", "updated_at"])
+                HistorialAsignacion.objects.create(
+                    asignacion=obj,
+                    accion="ESTADO_CLIENTE",
+                    detalles="Estado cliente = autoriza (asignación VISITADA).",
+                    usuario=request.user,
+                )
 
-            HistorialAsignacion.objects.create(
-                asignacion=obj,
-                accion="REAGENDADA",
-                detalles=f"Reagendada desde auditoría a {f} {b}",
-                usuario=user,
-            )
+            elif canonical in {"sin_moradores", "rechaza", "contingencia", "masivo"}:
+                obj.estado = "CANCELADA"
+                obj.save(update_fields=["estado", "updated_at"])
+                HistorialAsignacion.objects.create(
+                    asignacion=obj,
+                    accion="ESTADO_CLIENTE",
+                    detalles=f"Estado cliente = {canonical} (asignación CANCELADA).",
+                    usuario=request.user,
+                )
 
-            # Encolamos notificación (cuando configures SMTP, se enviará)
-            Notificacion.objects.create(
-                tipo="reagendo",
-                asignacion=obj,
-                canal=Notificacion.Canal.NONE,
-                destino="",
-                provider="",
-                payload={
-                    "asignacion_id": obj.id,
-                    "direccion": obj.direccion,
-                    "comuna": obj.comuna,
-                    "reagendado_fecha": str(f),
-                    "reagendado_bloque": b,
-                    "tecnico_id": getattr(user, "id", None),
-                    "tecnico_email": getattr(user, "email", ""),
-                },
-                status=Notificacion.Estado.QUEUED,
-            )
+            else:  # reagendo
+                f = data.get("reagendado_fecha")
+                b = data.get("reagendado_bloque")
+                if not f or not b:
+                    return Response(
+                        {"estado_cliente": ["Este campo es requerido."],
+                         "detail": "Debe indicar fecha (YYYY-MM-DD) y bloque (10-13|14-18)."},
+                        status=400,
+                    )
+                if str(f) < str(timezone.localdate()):
+                    return Response({"detail": "La fecha reagendada no puede ser pasada."}, status=400)
+                if b not in {"10-13", "14-18"}:
+                    return Response({"detail": "Bloque inválido (use 10-13 o 14-18)."}, status=400)
 
-        return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
+                obj.reagendado_fecha = f
+                obj.reagendado_bloque = b
+                obj.estado = "REAGENDADA"
+                obj.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
+
+                HistorialAsignacion.objects.create(
+                    asignacion=obj,
+                    accion="REAGENDADA",
+                    detalles=f"Reagendada desde auditoría a {f} {b}",
+                    usuario=request.user,
+                )
+
+                # ---- Notificación por email al técnico + copias a NOTIFY_ADMIN_EMAILS ----
+                to_list = []
+                if getattr(obj.asignado_a, "email", ""):
+                    to_list.append(obj.asignado_a.email)
+                # Copias
+                to_list += getattr(settings, "NOTIFY_ADMIN_EMAILS", [])
+
+                subject = f"[Reagendo] Asignación #{obj.id}"
+                body = (
+                    f"Asignación: #{obj.id}\n"
+                    f"Dirección: {obj.direccion}\n"
+                    f"Comuna: {obj.comuna}\n"
+                    f"Nueva fecha: {str(f)}\n"
+                    f"Bloque: {b}\n"
+                    f"Técnico: {getattr(obj.asignado_a, 'email', '')}\n"
+                    f"Generado: {timezone.now().strftime('%Y-%m-%d %H:%M')}\n"
+                )
+
+                notif = Notificacion.objects.create(
+                    tipo="reagendo",
+                    asignacion=obj,
+                    canal=Notificacion.Canal.EMAIL,
+                    destino=",".join(to_list),
+                    provider="",
+                    payload={
+                        "asignacion_id": obj.id,
+                        "reagendado_fecha": str(f),
+                        "reagendado_bloque": b,
+                        "tecnico_email": getattr(obj.asignado_a, "email", ""),
+                    },
+                    status=Notificacion.Estado.QUEUED,
+                )
+
+                ok, provider, msg_id, error = send_email(
+                    subject=subject,
+                    body=body,
+                    to_list=to_list,
+                    from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@localhost"),
+                )
+                notif.provider = provider
+                notif.sent_at = timezone.now()
+                if ok:
+                    notif.status = Notificacion.Estado.SENT
+                else:
+                    notif.status = Notificacion.Estado.FAILED
+                    notif.error = error
+                notif.save(update_fields=["provider", "status", "error", "sent_at"])
+
+        serializer = DireccionAsignadaSerializer(obj, context={"request": request})
+        return Response(serializer.data)
 
     # ---------- MÉTRICAS ----------
     @action(detail=False, methods=["get"], url_path="metrics/resumen")
