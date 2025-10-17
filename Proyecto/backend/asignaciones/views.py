@@ -7,9 +7,9 @@ import unicodedata
 from typing import List, Dict, Any
 
 from django.db import transaction
-from django.db.models import Case, When, Value, IntegerField, Q, Count
+from django.db.models import Case, When, Value, IntegerField, Q, Count, Sum
 from django.db.models.functions import TruncDate
-from django.http import HttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 
 from openpyxl import load_workbook, Workbook
@@ -35,7 +35,6 @@ from .serializers import (
 )
 
 from core.models import Notificacion
-from core.notify import enviar_notificacion_real  # envío real SMTP
 
 
 # -------- Helpers de normalización / parsing --------
@@ -230,11 +229,62 @@ def _parse_estado_cliente_from_request(data: Dict[str, Any]) -> str | None:
         "reagenda": "reagendo",
         "reagendada": "reagendo",
         "reagendado": "reagendo",
-        "reagendó": "reagendo",
     }
     if key == "reagendo":
         return "reagendo"
     return synonyms.get(key)
+
+
+# ---------- Filtros y agregador OPTIMIZADO para métricas ----------
+
+def _apply_filters(qs, params, user=None):
+    """Aplica filtros del dashboard sobre qs de DireccionAsignada."""
+    if params.get("fecha__gte"):
+        qs = qs.filter(fecha__gte=params["fecha__gte"])
+    if params.get("fecha__lte"):
+        qs = qs.filter(fecha__lte=params["fecha__lte"])
+    if params.get("tecnico_id"):
+        qs = qs.filter(asignado_a_id=params["tecnico_id"])
+    if params.get("zona"):
+        qs = qs.filter(zona=params["zona"])
+    if params.get("comuna"):
+        qs = qs.filter(comuna=params["comuna"])
+    if params.get("marca"):
+        qs = qs.filter(marca=params["marca"])
+    if params.get("tecnologia"):
+        qs = qs.filter(tecnologia=params["tecnologia"])
+    return qs
+
+
+def _metrics_aggregate(qs):
+    """
+    Devuelve totales en UNA sola consulta:
+      total, pendientes, asignadas, visitadas, canceladas, reagendadas, pct_* y % cumplimiento.
+    """
+    agg = qs.aggregate(
+        total=Count("id"),
+        pendientes=Sum(Case(When(estado="PENDIENTE", then=1), default=0, output_field=IntegerField())),
+        asignadas=Sum(Case(When(estado="ASIGNADA",  then=1), default=0, output_field=IntegerField())),
+        visitadas=Sum(Case(When(estado="VISITADA",  then=1), default=0, output_field=IntegerField())),
+        canceladas=Sum(Case(When(estado="CANCELADA", then=1), default=0, output_field=IntegerField())),
+        reagendadas=Sum(Case(When(estado="REAGENDADA", then=1), default=0, output_field=IntegerField())),
+    )
+    total = agg["total"] or 0
+    def pct(n):
+        return round(100.0 * (n or 0) / total, 1) if total else 0.0
+    out = {
+        "total": total,
+        "pendientes": agg["pendientes"] or 0,
+        "asignadas": agg["asignadas"] or 0,
+        "visitadas": agg["visitadas"] or 0,
+        "canceladas": agg["canceladas"] or 0,
+        "reagendadas": agg["reagendadas"] or 0,
+    }
+    out["pct_visitadas"]   = pct(out["visitadas"])
+    out["pct_reagendadas"] = pct(out["reagendadas"])
+    # Porcentaje de cumplimiento = visitadas / total
+    out["pct_cumplimiento"] = pct(out["visitadas"])
+    return out
 
 
 # ---------------------------------------------------
@@ -297,6 +347,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             })
 
         # POST
+        # (Sin restricción de estar previamente asignada; puedes asignarte incluso si está libre)
         if getattr(u, "rol", None) != "tecnico":
             return Response({"detail": "Solo técnicos pueden asignarse visitas."}, status=403)
 
@@ -332,7 +383,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             if tecnico_id:
                 qs = qs.filter(Q(usuario_id=tecnico_id) | Q(asignacion__asignado_a_id=tecnico_id))
 
-        # Filtros de asignación
+        # Filtros de campos de asignación
         estado = request.query_params.get("estado")
         marca = request.query_params.get("marca")
         tecnologia = request.query_params.get("tecnologia")
@@ -351,8 +402,8 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         desde = request.query_params.get("fecha_after") or request.query_params.get("desde")
         hasta = request.query_params.get("fecha_before") or request.query_params.get("hasta")
         hoy = timezone.localdate().isoformat()
-        if desde and desde.upper() == "HOY": desde = hoy
-        if hasta and hasta.upper() == "HOY": hasta = hoy
+        if desde and isinstance(desde, str) and desde.upper() == "HOY": desde = hoy
+        if hasta and isinstance(hasta, str) and hasta.upper() == "HOY": hasta = hoy
         if desde: qs = qs.filter(asignacion__fecha__gte=desde)
         if hasta: qs = qs.filter(asignacion__fecha__lte=hasta)
 
@@ -379,8 +430,8 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         desde = p.get("fecha_after") or p.get("desde")
         hasta = p.get("fecha_before") or p.get("hasta")
         hoy = timezone.localdate().isoformat()
-        if desde and desde.upper() == "HOY": desde = hoy
-        if hasta and hasta.upper() == "HOY": hasta = hoy
+        if desde and isinstance(desde, str) and desde.upper() == "HOY": desde = hoy
+        if hasta and isinstance(hasta, str) and hasta.upper() == "HOY": hasta = hoy
         if desde: qs = qs.filter(asignacion__fecha__gte=desde)
         if hasta: qs = qs.filter(asignacion__fecha__lte=hasta)
 
@@ -410,9 +461,8 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             resp["Content-Disposition"] = 'attachment; filename="historial.csv"'
             return resp
 
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Historial"
+        wb = Workbook(write_only=True)
+        ws = wb.create_sheet(title="Historial")
         ws.append(["historial_id","asignacion_id","direccion","comuna","marca","tecnologia","fecha","bloque","accion","detalles","usuario_email","creado"])
         for h in qs.iterator():
             ws.append([
@@ -589,7 +639,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         3/rechaza                -> CANCELADA
         4/contingencia           -> CANCELADA
         5/masivo                 -> CANCELADA
-        6/reagendo (reagendó/reagendada/reagenda) -> requiere fecha/bloque -> REAGENDADA + notificación email
+        6/reagendo (reagendó/reagendada/reagenda) -> requiere fecha/bloque -> REAGENDADA + notificación en cola
         """
         obj = self.get_object()
 
@@ -651,14 +701,13 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                     usuario=request.user,
                 )
 
-                # Notificación por email al técnico + copia a NOTIFY_ADMIN_EMAILS
-                dest = getattr(obj.asignado_a, "email", "")
-                notif = Notificacion.objects.create(
+                # Encolamos notificación (email se enviará con notify si está configurado)
+                Notificacion.objects.create(
                     tipo="reagendo",
                     asignacion=obj,
-                    canal=Notificacion.Canal.EMAIL,
-                    destino=dest,
-                    provider="",   # lo setea notify al enviar
+                    canal=Notificacion.Canal.NONE,
+                    destino="",
+                    provider="",
                     payload={
                         "asignacion_id": obj.id,
                         "direccion": obj.direccion,
@@ -666,223 +715,109 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                         "reagendado_fecha": str(f),
                         "reagendado_bloque": b,
                         "tecnico_id": getattr(request.user, "id", None),
-                        "tecnico_email": dest,
                     },
                     status=Notificacion.Estado.QUEUED,
                 )
-                try:
-                    enviar_notificacion_real(notif)
-                except Exception as e:
-                    # No rompemos el flujo si falla el email
-                    pass
 
         serializer = DireccionAsignadaSerializer(obj, context={"request": request})
         return Response(serializer.data)
 
-    # ---------- MÉTRICAS ----------
+    # ---------- MÉTRICAS (resumen/tecnico) ----------
     @action(detail=False, methods=["get"], url_path="metrics/resumen")
     def metrics_resumen(self, request):
-        qs = DireccionAsignada.objects.all()
-        p = request.query_params
-
-        if p.get("fecha__gte"): qs = qs.filter(fecha__gte=p["fecha__gte"])
-        if p.get("fecha__lte"): qs = qs.filter(fecha__lte=p["fecha__lte"])
-        if p.get("tecnico_id"): qs = qs.filter(asignado_a_id=p["tecnico_id"])
-        if p.get("zona"): qs = qs.filter(zona=p["zona"])
-        if p.get("comuna"): qs = qs.filter(comuna=p["comuna"])
-        if p.get("marca"): qs = qs.filter(marca=p["marca"])
-        if p.get("tecnologia"): qs = qs.filter(tecnologia=p["tecnologia"])
-
-        total = qs.count()
-        c = lambda s: qs.filter(estado=s).count()
-        pend, asig, vis, canc, reag = (c("PENDIENTE"), c("ASIGNADA"), c("VISITADA"), c("CANCELADA"), c("REAGENDADA"))
-        pct = lambda n: round(100.0 * n / total, 1) if total else 0.0
-        return Response({
-            "total": total,
-            "pendientes": pend,
-            "asignadas": asig,
-            "visitadas": vis,
-            "canceladas": canc,
-            "reagendadas": reag,
-            "pct_visitadas": pct(vis),
-            "pct_reagendadas": pct(reag),
-        })
+        qs = _apply_filters(DireccionAsignada.objects.all(), request.query_params)
+        data = _metrics_aggregate(qs)
+        return Response(data)
 
     @action(detail=False, methods=["get"], url_path="metrics/tecnico")
     def metrics_tecnico(self, request):
-        qs = DireccionAsignada.objects.all()
-        p = request.query_params
+        p = request.query_params.copy()
         u = request.user
-
-        tecnico_id = p.get("tecnico_id")
         if getattr(u, "rol", None) == "tecnico":
-            tecnico_id = u.id
-        if tecnico_id:
-            qs = qs.filter(asignado_a_id=tecnico_id)
+            p = p.copy()
+            p._mutable = True
+            p["tecnico_id"] = str(u.id)
+        qs = _apply_filters(DireccionAsignada.objects.all(), p)
+        data = _metrics_aggregate(qs)
+        return Response(data)
 
-        if p.get("fecha__gte"): qs = qs.filter(fecha__gte=p["fecha__gte"])
-        if p.get("fecha__lte"): qs = qs.filter(fecha__lte=p["fecha__lte"])
-        if p.get("zona"): qs = qs.filter(zona=p["zona"])
-        if p.get("comuna"): qs = qs.filter(comuna=p["comuna"])
-        if p.get("marca"): qs = qs.filter(marca=p["marca"])
-        if p.get("tecnologia"): qs = qs.filter(tecnologia=p["tecnologia"])
-
-        total = qs.count()
-        c = lambda s: qs.filter(estado=s).count()
-        pend, asig, vis, canc, reag = (c("PENDIENTE"), c("ASIGNADA"), c("VISITADA"), c("CANCELADA"), c("REAGENDADA"))
-        pct = lambda n: round(100.0 * n / total, 1) if total else 0.0
-        return Response({
-            "total": total,
-            "pendientes": pend,
-            "asignadas": asig,
-            "visitadas": vis,
-            "canceladas": canc,
-            "reagendadas": reag,
-            "pct_visitadas": pct(vis),
-            "pct_reagendadas": pct(reag),
-        })
-
-    # (compat) Export de resumen (XLSX/CSV) por POST
+    # ---------- MÉTRICAS: EXPORT (CSV/XLSX, POST legacy) ----------
     @action(detail=False, methods=["post"], url_path="metrics/export")
     def metrics_export(self, request):
         if getattr(request.user, "rol", None) != "administrador":
             return Response({"detail": "Solo administrador puede exportar métricas."}, status=403)
 
-        resumen = self.metrics_resumen(request).data
+        qs = _apply_filters(DireccionAsignada.objects.all(), request.query_params)
+        resumen = _metrics_aggregate(qs)
         fmt = (request.data or {}).get("format", "xlsx").lower()
 
-        if fmt == "csv":
-            buff = io.StringIO()
-            w = csv.writer(buff)
-            w.writerow(["total","pendientes","asignadas","visitadas","canceladas","reagendadas","pct_visitadas","pct_reagendadas"])
-            w.writerow([
-                resumen["total"], resumen["pendientes"], resumen["asignadas"],
-                resumen["visitadas"], resumen["canceladas"], resumen["reagendadas"],
-                resumen["pct_visitadas"], resumen["pct_reagendadas"]
-            ])
-            resp = HttpResponse(buff.getvalue(), content_type="text/csv; charset=utf-8")
-            resp["Content-Disposition"] = 'attachment; filename="metricas_resumen.csv"'
-            return resp
-
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Resumen"
-        ws.append(["total","pendientes","asignadas","visitadas","canceladas","reagendadas","pct_visitadas","pct_reagendadas"])
-        ws.append([
+        headers = ["total","pendientes","asignadas","visitadas","canceladas","reagendadas","pct_visitadas","pct_reagendadas","pct_cumplimiento"]
+        row = [
             resumen["total"], resumen["pendientes"], resumen["asignadas"],
             resumen["visitadas"], resumen["canceladas"], resumen["reagendadas"],
-            resumen["pct_visitadas"], resumen["pct_reagendadas"]
-        ])
-        out = io.BytesIO()
-        wb.save(out)
-        resp = HttpResponse(out.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        resp["Content-Disposition"] = 'attachment; filename="metricas_resumen.xlsx"'
-        return resp
-
-    # ---- NUEVO: Export de métricas (resumen/serie) en CSV o XLSX por GET ----
-    @action(detail=False, methods=["get"], url_path="metrics/export_file")
-    def metrics_export_file(self, request):
-        """
-        Exporta métricas a archivo.
-        Uso:
-          - GET /api/asignaciones/metrics/export_file?tipo=resumen&format=xlsx
-          - GET /api/asignaciones/metrics/export_file?tipo=serie&format=csv
-        (defaults: tipo=resumen, format=xlsx)
-        Acepta los mismos filtros que /metrics/resumen y /metrics/serie.
-        """
-        if getattr(request.user, "rol", None) != "administrador":
-            return Response({"detail": "Solo administrador puede exportar métricas."}, status=403)
-
-        p = request.query_params
-        tipo = (p.get("tipo") or "resumen").lower()
-        fmt = (p.get("format") or "xlsx").lower()
-
-        # armar queryset base con filtros
-        qs = DireccionAsignada.objects.all()
-        if p.get("fecha__gte"): qs = qs.filter(fecha__gte=p["fecha__gte"])
-        if p.get("fecha__lte"): qs = qs.filter(fecha__lte=p["fecha__lte"])
-        if p.get("tecnico_id"): qs = qs.filter(asignado_a_id=p["tecnico_id"])
-        if p.get("zona"): qs = qs.filter(zona=p["zona"])
-        if p.get("comuna"): qs = qs.filter(comuna=p["comuna"])
-        if p.get("marca"): qs = qs.filter(marca=p["marca"])
-        if p.get("tecnologia"): qs = qs.filter(tecnologia=p["tecnologia"])
-
-        # --- SERIE ---
-        if tipo == "serie":
-            base = qs.filter(fecha__isnull=False)
-
-            def serie(estado: str):
-                agg = (base.filter(estado=estado)
-                             .annotate(d=TruncDate("fecha"))
-                             .values("d").annotate(c=Count("id")).order_by("d"))
-                return {a["d"].isoformat(): a["c"] for a in agg}
-
-            v = serie("VISITADA")
-            r = serie("REAGENDADA")
-            c = serie("CANCELADA")
-            fechas = sorted(set(v.keys()) | set(r.keys()) | set(c.keys()))
-
-            if fmt == "csv":
-                buff = io.StringIO()
-                w = csv.writer(buff)
-                w.writerow(["fecha", "visitadas", "reagendadas", "canceladas"])
-                for d in fechas:
-                    w.writerow([d, v.get(d, 0), r.get(d, 0), c.get(d, 0)])
-                resp = HttpResponse(buff.getvalue(), content_type="text/csv; charset=utf-8")
-                resp["Content-Disposition"] = 'attachment; filename="metricas_serie.csv"'
-                return resp
-
-            # XLSX
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Serie"
-            ws.append(["fecha", "visitadas", "reagendadas", "canceladas"])
-            for d in fechas:
-                ws.append([d, v.get(d, 0), r.get(d, 0), c.get(d, 0)])
-            out = io.BytesIO()
-            wb.save(out)
-            resp = HttpResponse(out.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            resp["Content-Disposition"] = 'attachment; filename="metricas_serie.xlsx"'
-            return resp
-
-        # --- RESUMEN ---
-        total = qs.count()
-        ccount = lambda s: qs.filter(estado=s).count()
-        pend, asig, vis, canc, reag = (ccount("PENDIENTE"), ccount("ASIGNADA"), ccount("VISITADA"), ccount("CANCELADA"), ccount("REAGENDADA"))
-        pct = lambda n: round(100.0 * n / total, 1) if total else 0.0
+            resumen["pct_visitadas"], resumen["pct_reagendadas"], resumen["pct_cumplimiento"]
+        ]
 
         if fmt == "csv":
             buff = io.StringIO()
             w = csv.writer(buff)
-            w.writerow(["total","pendientes","asignadas","visitadas","canceladas","reagendadas","pct_visitadas","pct_reagendadas"])
-            w.writerow([total, pend, asig, vis, canc, reag, pct(vis), pct(reag)])
+            w.writerow(headers); w.writerow(row)
             resp = HttpResponse(buff.getvalue(), content_type="text/csv; charset=utf-8")
             resp["Content-Disposition"] = 'attachment; filename="metricas_resumen.csv"'
             return resp
 
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Resumen"
-        ws.append(["total","pendientes","asignadas","visitadas","canceladas","reagendadas","pct_visitadas","pct_reagendadas"])
-        ws.append([total, pend, asig, vis, canc, reag, pct(vis), pct(reag)])
+        wb = Workbook(write_only=True)
+        ws = wb.create_sheet(title="Resumen")
+        ws.append(headers); ws.append(row)
         out = io.BytesIO()
         wb.save(out)
         resp = HttpResponse(out.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         resp["Content-Disposition"] = 'attachment; filename="metricas_resumen.xlsx"'
         return resp
 
+    # ---------- NUEVO: MÉTRICAS EXPORT (GET, para dashboard) ----------
+    @action(detail=False, methods=["get"], url_path="export/metricas")
+    def export_metricas_get(self, request):
+        """
+        GET /api/asignaciones/export/metricas?fecha__gte=...&fecha__lte=...&tecnico_id=...&zona=...&comuna=...&marca=...&tecnologia=...&format=xlsx|csv
+        - Genera XLSX (default) o CSV con las métricas del dashboard (incluye % cumplimiento).
+        - Usa una sola consulta agregada (optimizado).
+        """
+        if getattr(request.user, "rol", None) not in {"administrador", "auditor", "tecnico"}:
+            return Response({"detail": "No autorizado."}, status=403)
+
+        qs = _apply_filters(DireccionAsignada.objects.all(), request.query_params)
+        resumen = _metrics_aggregate(qs)
+        fmt = (request.query_params.get("format") or "xlsx").lower()
+
+        headers = ["total","pendientes","asignadas","visitadas","canceladas","reagendadas","pct_visitadas","pct_reagendadas","pct_cumplimiento"]
+        row = [
+            resumen["total"], resumen["pendientes"], resumen["asignadas"],
+            resumen["visitadas"], resumen["canceladas"], resumen["reagendadas"],
+            resumen["pct_visitadas"], resumen["pct_reagendadas"], resumen["pct_cumplimiento"]
+        ]
+
+        if fmt == "csv":
+            buff = io.StringIO()
+            w = csv.writer(buff)
+            w.writerow(headers); w.writerow(row)
+            resp = HttpResponse(buff.getvalue(), content_type="text/csv; charset=utf-8")
+            resp["Content-Disposition"] = 'attachment; filename="metricas_dashboard.csv"'
+            return resp
+
+        wb = Workbook(write_only=True)
+        ws = wb.create_sheet(title="Resumen")
+        ws.append(headers); ws.append(row)
+        out = io.BytesIO()
+        wb.save(out)
+        resp = HttpResponse(out.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        resp["Content-Disposition"] = 'attachment; filename="metricas_dashboard.xlsx"'
+        return resp
+
+    # ---------- MÉTRICAS: SERIE (datos listos para gráficos) ----------
     @action(detail=False, methods=["get"], url_path="metrics/serie")
     def metrics_serie(self, request):
-        qs = DireccionAsignada.objects.all()
-        p = request.query_params
-
-        if p.get("fecha__gte"): qs = qs.filter(fecha__gte=p["fecha__gte"])
-        if p.get("fecha__lte"): qs = qs.filter(fecha__lte=p["fecha__lte"])
-        if p.get("tecnico_id"): qs = qs.filter(asignado_a_id=p["tecnico_id"])
-        if p.get("zona"): qs = qs.filter(zona=p["zona"])
-        if p.get("comuna"): qs = qs.filter(comuna=p["comuna"])
-        if p.get("marca"): qs = qs.filter(marca=p["marca"])
-        if p.get("tecnologia"): qs = qs.filter(tecnologia=p["tecnologia"])
+        qs = _apply_filters(DireccionAsignada.objects.all(), request.query_params)
 
         def serie_por_estado(estado: str):
             base = qs.filter(estado=estado, fecha__isnull=False)
