@@ -409,7 +409,7 @@ export default function AuditorDireccionEdit() {
               <button type="submit" className={styles.button} disabled={saving}>
                 {saving ? "Guardando…" : "Guardar cambios"}
               </button>
-              <button type="button" className={styles.button} onClick={() => navigate(-1)} disabled={saving}>
+              <button type="button" className={styles.button} style={{ background: "#6b7280" }} onClick={() => navigate(-1)} disabled={saving}>
                 Volver
               </button>
             </div>

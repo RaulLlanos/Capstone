@@ -1,85 +1,28 @@
 /* eslint-disable no-unused-vars */
 // src/pages/TecnicoAuditoriaAdd.jsx
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import styles from "./Login.module.css";
 
-// ===== Constantes del backend (según OpenAPI nuevo) =====
-const ESTADO_CLIENTE_OPCIONES = [
-  { v: "autoriza", label: "Autoriza" },
-  { v: "sin_moradores", label: "Sin moradores" },
-  { v: "rechaza", label: "Rechaza" },
-  { v: "contingencia", label: "Contingencia" },
-  { v: "masivo", label: "Incidencia masivo" },
-  { v: "reagendo", label: "Reagendó" },
+// ENUM del backend (OpenAPI)
+const ESTADOS_CLIENTE = [
+  { value: "autoriza", label: "Autoriza a ingresar" },
+  { value: "sin_moradores", label: "Sin Moradores" },
+  { value: "rechaza", label: "Rechaza" },
+  { value: "contingencia", label: "Contingencia externa" },
+  { value: "masivo", label: "Incidencia masivo" },
+  { value: "reagendo", label: "Reagendó" },
 ];
 
-const BLOQUES = ["10-13", "14-18"];
-
-// ===== Helpers =====
-function mapEstadoAsignacion(estadoCliente) {
-  switch (estadoCliente) {
-    case "autoriza":
-      return "VISITADA";
-    case "reagendo":
-      return "REAGENDADA";
-    case "sin_moradores":
-    case "rechaza":
-    case "contingencia":
-    case "masivo":
-      return "CANCELADA";
-    default:
-      return undefined;
-  }
-}
-
-async function findAuditByAsignacion(asignacionId) {
-  // Intento 1: filtro directo por asignacion (común en DRF)
-  try {
-    const r = await api.get("/api/auditorias/", {
-      params: { asignacion: asignacionId },
-    });
-    const data = r.data;
-    const list = Array.isArray(data?.results)
-      ? data.results
-      : Array.isArray(data)
-      ? data
-      : [];
-    if (list.length) return list[0];
-  } catch (_) { /* empty */ }
-
-  // Intento 2: algunos setups usan asignacion__id
-  try {
-    const r = await api.get("/api/auditorias/", {
-      params: { "asignacion__id": asignacionId },
-    });
-    const data = r.data;
-    const list = Array.isArray(data?.results)
-      ? data.results
-      : Array.isArray(data)
-      ? data
-      : [];
-    if (list.length) return list[0];
-  } catch (_) { /* empty */ }
-
-  // Intento 3: usar search si está habilitado
-  try {
-    const r = await api.get("/api/auditorias/", {
-      params: { search: String(asignacionId) },
-    });
-    const data = r.data;
-    const list = Array.isArray(data?.results)
-      ? data.results
-      : Array.isArray(data)
-      ? data
-      : [];
-    const hit = list.find((a) => Number(a.asignacion) === Number(asignacionId));
-    if (hit) return hit;
-  } catch (_) { /* empty */ }
-
-  return null;
+// util: YYYY-MM-DD local
+function todayLocalYMD() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 export default function TecnicoAuditoriaAdd() {
@@ -91,34 +34,24 @@ export default function TecnicoAuditoriaAdd() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [flash, setFlash] = useState("");
 
+  // Form mínimo compatible con el backend actual
   const [form, setForm] = useState({
-    nombre_auditor: "",
     estado_cliente: "",
-    reagendado_fecha: "",
-    reagendado_bloque: "",
+    // ocultos/condicionales para reagendo
+    reagendado_fecha: todayLocalYMD(),
+    reagendado_bloque: "10-13", // valores válidos: "10-13" | "14-18"
   });
 
-  // Si ya existe auditoría, redirige a la vista
+  const requiereReagendo = form.estado_cliente === "reagendo";
+
   useEffect(() => {
     (async () => {
       try {
         setLoading(true);
-
-        // 1) Carga asignación
         const res = await api.get(`/api/asignaciones/${id}/`);
         setDetalle(res.data || {});
-
-        // 2) Busca auditoría existente para esta asignación
-        const existing = await findAuditByAsignacion(id);
-        if (existing) {
-          navigate(`/tecnico/auditoria/ver/${id}`, { replace: true });
-          return;
-        }
-
-        // prellenar nombre auditor (solo UI)
-        const who = user?.name || user?.first_name || user?.email || "";
-        if (who) setForm((f) => ({ ...f, nombre_auditor: who }));
       } catch (err) {
         console.error("GET asignación:", err?.response?.status, err?.response?.data);
         setError("No se pudo cargar la asignación.");
@@ -126,7 +59,7 @@ export default function TecnicoAuditoriaAdd() {
         setLoading(false);
       }
     })();
-  }, [id, user, navigate]);
+  }, [id]);
 
   const onChange = (e) => {
     const { name, value } = e.target;
@@ -140,21 +73,13 @@ export default function TecnicoAuditoriaAdd() {
       setError("Asignación no cargada.");
       return;
     }
-    if (!form.nombre_auditor.trim()) {
-      setError("Ingresa tu nombre (auditor).");
-      return;
-    }
     if (!form.estado_cliente) {
       setError("Selecciona el estado del cliente.");
       return;
     }
-    if (form.estado_cliente === "reagendo") {
-      if (!form.reagendado_fecha) {
-        setError("Debes indicar la fecha para reagendar.");
-        return;
-      }
-      if (!form.reagendado_bloque) {
-        setError("Debes indicar el bloque para reagendar.");
+    if (requiereReagendo) {
+      if (!form.reagendado_fecha || !form.reagendado_bloque) {
+        setError("Para reagendar debes indicar fecha y bloque.");
         return;
       }
     }
@@ -163,30 +88,34 @@ export default function TecnicoAuditoriaAdd() {
       setSaving(true);
       await api.get("/auth/csrf").catch(() => {});
 
-      // payload JSON según schema
-      const payload = {
-        asignacion: Number(detalle.id),
-        estado_cliente: form.estado_cliente,
-      };
-      if (form.estado_cliente === "reagendo") {
-        payload.reagendado_fecha = form.reagendado_fecha; // YYYY-MM-DD
-        payload.reagendado_bloque = form.reagendado_bloque; // 10-13 | 14-18
+      // 1) Crear auditoría mínima: asignacion + estado_cliente
+      const fd = new FormData();
+      fd.append("asignacion", String(detalle.id));
+      fd.append("estado_cliente", form.estado_cliente);
+      // (El backend tiene MUCHOS campos opcionales; no los enviamos y pasan las validaciones.)
+
+      await api.post("/api/auditorias/", fd);
+
+      // 2) Sincronizar el estado de la asignación con el endpoint oficial:
+      //    /api/asignaciones/{id}/estado_cliente/
+      //    - Si es "reagendo", exige reagendado_fecha + reagendado_bloque (OpenAPI actual).
+      const payload = requiereReagendo
+        ? {
+            estado_cliente: "reagendo",
+            reagendado_fecha: form.reagendado_fecha,
+            reagendado_bloque: form.reagendado_bloque,
+          }
+        : { estado_cliente: form.estado_cliente };
+
+      try {
+        await api.post(`/api/asignaciones/${id}/estado_cliente/`, payload);
+      } catch (err) {
+        // No bloquear la UX si falla, pero informar en consola
+        console.warn("No se pudo actualizar estado de asignación:", err?.response?.status, err?.response?.data);
       }
 
-      await api.post("/api/auditorias/", payload);
-
-      // Best-effort: actualizar estado de la asignación
-      const nuevoEstado = mapEstadoAsignacion(form.estado_cliente);
-      if (nuevoEstado) {
-        try {
-          await api.patch(`/api/asignaciones/${id}/`, { estado: nuevoEstado });
-        } catch (err) {
-          // Si no hay permiso de PATCH para técnico, no bloquear el flujo
-          console.warn("PATCH estado asignación rechazado (se ignora):", err?.response?.status);
-        }
-      }
-
-      // Ir a la vista de auditoría para esta asignación
+      // 3) Ir a la vista (si la tienes) o volver con flash
+      setFlash("Auditoría registrada.");
       navigate(`/tecnico/auditoria/ver/${id}`, {
         replace: true,
         state: { flash: "Auditoría registrada." },
@@ -197,9 +126,7 @@ export default function TecnicoAuditoriaAdd() {
       const msg =
         typeof data === "string"
           ? data
-          : data.detail ||
-            data.error ||
-            "No se pudo registrar la auditoría.";
+          : data.detail || data.error || "No se pudo registrar la auditoría.";
       setError(msg);
     } finally {
       setSaving(false);
@@ -218,7 +145,7 @@ export default function TecnicoAuditoriaAdd() {
       <div className={styles.card} style={{ maxWidth: 720 }}>
         <header className={styles.header}>
           <h1 className={styles.title}>Auditoría de instalación</h1>
-          <p className={styles.subtitle}>Se vinculará a la dirección seleccionada al guardar.</p>
+          <p className={styles.subtitle}>Usa el estado del cliente según lo observado en la visita.</p>
         </header>
 
         {loading ? (
@@ -235,22 +162,11 @@ export default function TecnicoAuditoriaAdd() {
               <Row label="Tecnología">{detalle?.tecnologia}</Row>
               <Row label="RUT cliente">{detalle?.rut_cliente}</Row>
               <Row label="ID vivienda">{detalle?.id_vivienda}</Row>
-              <Row label="Fecha">{String(detalle?.fecha || "").slice(0,10)}</Row>
+              <Row label="Fecha">{String(detalle?.fecha || "").slice(0, 10)}</Row>
               <Row label="Estado">{detalle?.estado}</Row>
             </div>
 
             <form onSubmit={handleSubmit} className={styles.form}>
-              <label className={styles.label}>
-                Nombre auditor
-                <input
-                  className={styles.input}
-                  name="nombre_auditor"
-                  value={form.nombre_auditor}
-                  onChange={onChange}
-                  disabled={saving}
-                />
-              </label>
-
               <label className={styles.label}>
                 Estado cliente
                 <select
@@ -261,23 +177,24 @@ export default function TecnicoAuditoriaAdd() {
                   disabled={saving}
                 >
                   <option value="">Selecciona…</option>
-                  {ESTADO_CLIENTE_OPCIONES.map((o) => (
-                    <option key={o.v} value={o.v}>{o.label}</option>
+                  {ESTADOS_CLIENTE.map((e) => (
+                    <option key={e.value} value={e.value}>{e.label}</option>
                   ))}
                 </select>
               </label>
 
-              {form.estado_cliente === "reagendo" && (
+              {requiereReagendo && (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                   <label className={styles.label} style={{ margin: 0 }}>
-                    Fecha reagendada
+                    Fecha (YYYY-MM-DD)
                     <input
                       className={styles.input}
-                      type="date"
                       name="reagendado_fecha"
                       value={form.reagendado_fecha}
                       onChange={onChange}
                       disabled={saving}
+                      placeholder="YYYY-MM-DD"
+                      type="date"
                     />
                   </label>
                   <label className={styles.label} style={{ margin: 0 }}>
@@ -289,10 +206,8 @@ export default function TecnicoAuditoriaAdd() {
                       onChange={onChange}
                       disabled={saving}
                     >
-                      <option value="">Selecciona…</option>
-                      {BLOQUES.map((b) => (
-                        <option key={b} value={b}>{b}</option>
-                      ))}
+                      <option value="10-13">10:00-13:00</option>
+                      <option value="14-18">14:00-18:00</option>
                     </select>
                   </label>
                 </div>

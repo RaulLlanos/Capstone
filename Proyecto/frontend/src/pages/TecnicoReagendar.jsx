@@ -117,28 +117,28 @@ export default function TecnicoReagendar() {
 
     // Reemplaza el bloque try de handleSubmit por este:
     try {
-    setSaving(true);
-    await api.get("/auth/csrf").catch(() => {});
-    await enviarReagendar();
+      setSaving(true);
+      await api.get("/auth/csrf").catch(() => {});
+      await enviarReagendar();
 
-    // Si llegaste a esta pantalla desde una asignación específica (:id en la URL),
-    // vuelve al listado del técnico, mostrando un flash y forzando reload.
-    if (routeId) {
-        navigate("/tecnico", {
-        replace: true,
-        state: { flash: "Reagendado con éxito", reload: true },
-        });
-        return; // importante: no sigas, ya navegaste
-    }
+      // Si llegaste a esta pantalla desde una asignación específica (:id en la URL),
+      // vuelve al listado del técnico, mostrando un flash y forzando reload.
+      if (routeId) {
+          navigate("/tecnico", {
+          replace: true,
+          state: { flash: "Reagendado con éxito", reload: true },
+          });
+          return; // importante: no sigas, ya navegaste
+      }
 
-    // Si NO venías con :id (modo selector), te quedas en la página:
-    setOk("Reagendamiento enviado correctamente.");
-    setForm((f) => ({ ...f, fecha: "", bloque: "", motivo: "" }));
-    await loadMine();
+      // Si NO venías con :id (modo selector), te quedas en la página:
+      setOk("Reagendamiento enviado correctamente.");
+      setForm((f) => ({ ...f, fecha: "", bloque: "", motivo: "" }));
+      await loadMine();
     } catch (err) {
     // (…tu manejo de errores tal cual lo tienes…)
     } finally {
-    setSaving(false);
+      setSaving(false);
     }
 
   };

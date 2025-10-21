@@ -1,4 +1,3 @@
-/* eslint-disable no-unused-vars */
 // src/pages/Tecnico.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -35,7 +34,7 @@ function ymdToDmy(s) {
   return `${d.padStart(2, "0")}/${m.padStart(2, "0")}/${y}`;
 }
 
-// --- fecha/bloque EFECTIVOS: prioriza reagendado_* ---
+// fecha/bloque efectivos (prioriza reagendado_*)
 function getEffectiveDate(it) {
   const r =
     it.reagendado_fecha ||
@@ -53,10 +52,8 @@ function getEffectiveBlock(it) {
   return String(r || "");
 }
 
-// VISITADA en backend actual = completada
 const isCompletada = (it) => String(it.estado || "").toUpperCase() === "VISITADA";
 
-// ¿Mostrar badge “Reagendado”? sólo si estado es REAGENDADA y NO es hoy
 function showReagendadoBadge(it) {
   const eff = getEffectiveDate(it).slice(0, 10);
   const estado = String(it.estado || "").toUpperCase();
@@ -75,29 +72,74 @@ export default function Tecnico() {
   const [flash, setFlash] = useState("");
 
   const [q, setQ] = useState("");
-  const [filtro, setFiltro] = useState({
-    tecnologia: "",
-    marca: "",
-    zona: "",
-  });
+  const [filtro, setFiltro] = useState({ tecnologia: "", marca: "", zona: "" });
+
+  const [meId, setMeId] = useState(user?.id ?? null);
 
   const fetchId = useRef(0);
   const hoyYMD = todayLocalYMD();
   const hoyDMY = ymdToDmy(hoyYMD);
 
-  // ---------- Carga ----------
+  // Asegurar meId desde /api/usuarios/me/ si no viene en el contexto
+  useEffect(() => {
+    if (user?.id) {
+      setMeId(user.id);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await api.get("/api/usuarios/me/");
+        if (!cancelled) setMeId(r.data?.id ?? null);
+      } catch {
+        // si falla, meId queda null
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user]);
+
+  // ---------- Carga con fallback ----------
   const load = async () => {
     setLoading(true);
     setError("");
     const myFetch = ++fetchId.current;
     try {
-      // Usamos exactamente el endpoint que te funciona:
-      const r = await api.get("/api/asignaciones"); // <- sin trailing slash
-      if (myFetch !== fetchId.current) return;
-      setItems(normalizeList(r.data));
+      if (!meId) return; // esperar meId
+
+      let list = [];
+      let ok = false;
+      // Intento 1: con asignado_a
+      try {
+        const r1 = await api.get("/api/asignaciones/", { params: { asignado_a: meId } });
+        if (myFetch !== fetchId.current) return;
+        list = normalizeList(r1.data);
+        ok = true;
+      } catch (err1) {
+        const status = err1?.response?.status;
+        // Si el backend no acepta el filtro (400/404), hacemos fallback sin filtro
+        if (status !== 400 && status !== 404) {
+          throw err1; // otros errores (500, 401, etc.) sí deben mostrar error
+        }
+      }
+
+      if (!ok) {
+        // Intento 2: sin filtro y filtramos en cliente
+        const r2 = await api.get("/api/asignaciones/");
+        if (myFetch !== fetchId.current) return;
+        list = normalizeList(r2.data).filter((it) => it.asignado_a === meId);
+      } else {
+        // Incluso si el back lo aceptó, filtramos de nuevo por seguridad
+        list = list.filter((it) => it.asignado_a === meId);
+      }
+
+      setItems(list);
     } catch (err) {
-      console.error(err);
-      setError("No se pudo cargar la lista de visitas.");
+      console.error("Cargar asignaciones falló:", err?.response?.status, err?.response?.data);
+      const data = err?.response?.data || {};
+      setError(
+        (typeof data === "string" ? data : data.detail || data.error) ||
+        "No se pudo cargar la lista de visitas."
+      );
       setItems([]);
     } finally {
       if (myFetch === fetchId.current) setLoading(false);
@@ -105,10 +147,11 @@ export default function Tecnico() {
   };
 
   useEffect(() => {
-    load();
-  }, []);
+    if (meId) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meId]);
 
-  // Hidratar reagendadas si viene bandera pero faltan reagendado_*
+  // Hidratar reagendadas que no traen reagendado_*
   useEffect(() => {
     const needDetail = (items || [])
       .filter((it) => String(it.estado || "").toUpperCase() === "REAGENDADA")
@@ -140,9 +183,7 @@ export default function Tecnico() {
         /* silent */
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [items]);
 
   // Flash desde navigate(..., {state})
@@ -160,8 +201,8 @@ export default function Tecnico() {
   const misVisitas = useMemo(() => {
     const text = q.trim().toLowerCase();
     return (items || [])
-      // OJO: NO filtramos por isMine(); el backend ya entrega “las mías”
-      .filter((it) => !isCompletada(it)) // ocultar VISITADA aquí
+      .filter((it) => (meId ? it.asignado_a === meId : true))
+      .filter((it) => !isCompletada(it))
       .filter((it) => {
         if (filtro.tecnologia && String(it.tecnologia || "") !== filtro.tecnologia) return false;
         if (filtro.marca && String(it.marca || "") !== filtro.marca) return false;
@@ -185,7 +226,7 @@ export default function Tecnico() {
         return bag.includes(text);
       })
       .sort((a, b) => getEffectiveDate(a).localeCompare(getEffectiveDate(b)));
-  }, [items, q, filtro]);
+  }, [items, q, filtro, meId]);
 
   const visitasDeHoy = useMemo(
     () => misVisitas.filter((it) => getEffectiveDate(it).slice(0, 10) === hoyYMD),
@@ -209,29 +250,29 @@ export default function Tecnico() {
     return parts.join(" · ");
   };
 
-  // ---------- Acción: Para hoy ----------
+  // ---------- Acción: Para hoy (mantengo tu versión) ----------
   const setParaHoy = async (item, bloque = "10-13") => {
     try {
       await api.get("/auth/csrf").catch(() => {});
 
-      // 1) Reagendar usando el endpoint NUEVO
       await api.post(`/api/asignaciones/${item.id}/estado_cliente/`, {
         estado_cliente: "reagendo",
         reagendado_fecha: hoyYMD,
         reagendado_bloque: bloque,
       });
 
-      // 2) (Opcional) Si NO quieres que quede en "REAGENDADA" y prefieres mostrarla como "ASIGNADA":
-      //Esperar a Raul arregle este rol
-      await api.patch(`/api/asignaciones/${item.id}/`, { estado: "ASIGNADA" });
+      try {
+        await api.patch(`/api/asignaciones/${item.id}/`, { estado: "ASIGNADA" });
+      } catch {
+        /* ignora si el rol no puede */
+      }
 
-      // 3) Reflejo local inmediato
       setItems((prev) =>
         prev.map((it) =>
           it.id === item.id
             ? {
                 ...it,
-                estado: "ASIGNADA",           // o "REAGENDADA" si omites el PATCH anterior
+                estado: "ASIGNADA",
                 reagendado_fecha: hoyYMD,
                 reagendado_bloque: bloque,
               }
@@ -245,7 +286,6 @@ export default function Tecnico() {
       setError(data.detail || data.error || "No se pudo mover a hoy.");
     }
   };
-
 
   // ------------------------ UI ------------------------
   return (
