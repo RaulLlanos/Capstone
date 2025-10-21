@@ -103,6 +103,37 @@ class TechOwnsObjectOrAdmin(BasePermission):
         if owner_id is None and hasattr(obj, "asignacion"):
             owner_id = getattr(getattr(obj, "asignacion", None), "tecnico_id", None)
         return owner_id == getattr(user, "id", None)
+    
+
+class AdminOrSuperuserFull_TechCrudOwn(BasePermission):
+    """
+    - Admin / superuser: CRUD total.
+    - Técnico: CRUD pero solo sobre objetos propios:
+        * auditoría.tecnico_id == user.id
+        * o la asignación de esa auditoría pertenece al técnico (asignacion.asignado_a_id == user.id)
+      (Para 'create' validamos que la asignación sea suya.)
+    """
+    def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        if not getattr(user, "is_authenticated", False):
+            return False
+        if _is_admin(user) or getattr(user, "is_superuser", False):
+            return True
+        if _is_tech(user):
+            # Permitimos todos los métodos; en detalle se filtra con has_object_permission.
+            return True
+        return False
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        if _is_admin(user) or getattr(user, "is_superuser", False):
+            return True
+        if not _is_tech(user):
+            return False
+        owner_id = getattr(obj, "tecnico_id", None)
+        if owner_id is None and hasattr(obj, "asignacion"):
+            owner_id = getattr(getattr(obj, "asignacion", None), "asignado_a_id", None)
+        return owner_id == getattr(user, "id", None)
 
 
 # === Alias retrocompatibles (si algo del proyecto viejo los importaba) ===

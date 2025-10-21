@@ -1,224 +1,172 @@
 from django.utils import timezone
-from django.conf import settings
 from rest_framework import serializers
 
-from .models import AuditoriaVisita, Tri, EstadoCliente
-from asignaciones.models import HistorialAsignacion, DireccionAsignada
-
-# Notificaciones (email)
-from core.models import Notificacion
-try:
-    from core.notify import enviar_notificacion_real
-except Exception:
-    enviar_notificacion_real = None  # en dev si no existe, no rompe
-
-
-def _normalize_block(val: str | None) -> str | None:
-    if not val:
-        return None
-    v = str(val).strip()
-    # Acepta "10-13", "10:00 a 13:00", etc.
-    if v in ("10-13", "10:00 a 13:00", "10 a 13"):
-        return "10-13"
-    if v in ("14-18", "14:00 a 18:00", "14 a 18"):
-        return "14-18"
-    return None
-
-
-def _status_to_canonical(raw: str | None) -> str | None:
-    if raw is None:
-        return None
-    t = str(raw).strip().upper()
-    # Soporta valores en minúscula que pueda mandar el front: "reagendo", etc.
-    ali = {
-        "AUTORIZA": "AUTORIZA",
-        "SIN_MORADORES": "SIN_MORADORES",
-        "RECHAZA": "RECHAZA",
-        "CONTINGENCIA": "CONTINGENCIA",
-        "MASIVO": "MASIVO",
-        "REAGENDA": "REAGENDA",
-        # sinónimos comunes
-        "REAGENDO": "REAGENDA",
-        "REAGENDA": "REAGENDA",
-        "REAGENDÓ": "REAGENDA",
-        "REAGENDADA": "REAGENDA",
-        "REAGENDADO": "REAGENDA",
-    }
-    return ali.get(t) or ali.get(t.replace("Ó", "O"))
+from .models import (
+    AuditoriaVisita, Tri, EstadoCliente,
+    SERVICIO_CHOICES, INTERNET_CAT_CHOICES, TV_CAT_CHOICES,
+)
+from asignaciones.models import DireccionAsignada
 
 
 class AuditoriaVisitaSerializer(serializers.ModelSerializer):
-    # Campos derivados desde la asignación (solo lectura)
-    marca = serializers.CharField(source="asignacion.marca", read_only=True)
-    tecnologia = serializers.CharField(source="asignacion.tecnologia", read_only=True)
-    direccion = serializers.CharField(source="asignacion.direccion", read_only=True)
-    comuna = serializers.CharField(source="asignacion.comuna", read_only=True)
-    fecha = serializers.DateField(source="asignacion.fecha", read_only=True)
-    bloque = serializers.CharField(source="asignacion.reagendado_bloque", read_only=True)
-    tecnico_id = serializers.IntegerField(source="asignacion.asignado_a_id", read_only=True)
+    # Derivados (solo lectura) desde la asignación
+    brand = serializers.CharField(source="asignacion.marca", read_only=True)
+    technology = serializers.CharField(source="asignacion.tecnologia", read_only=True)
+    address = serializers.CharField(source="asignacion.direccion", read_only=True)
+    commune = serializers.CharField(source="asignacion.comuna", read_only=True)
+    scheduled_date = serializers.DateField(source="asignacion.fecha", read_only=True)
+    scheduled_block = serializers.CharField(source="asignacion.reagendado_bloque", read_only=True)
+    assigned_tech_id = serializers.IntegerField(source="asignacion.asignado_a_id", read_only=True)
 
-    # Salida cómoda de fotos (URLs)
-    photos = serializers.SerializerMethodField(read_only=True)
+    # Normalizamos que 'services' siempre sea lista de strings
+    services = serializers.ListField(
+        child=serializers.ChoiceField(choices=[c[0] for c in SERVICIO_CHOICES]),
+        allow_empty=True, required=False
+    )
 
     class Meta:
         model = AuditoriaVisita
-        fields = "__all__"  # exponemos todos los campos del modelo
-        read_only_fields = (
+        fields = [
+            "id", "created_at",
+
+            # Identificación
+            "asignacion", "tecnico",  # 'tecnico' se setea automáticamente para técnicos
+            "customer_status",
+
+            # Reagendamiento observado en auditoría (no toca la asignación)
+            "reschedule_date", "reschedule_block",
+
+            # Estado/equipo
+            "ont_modem_ok",
+
+            # Problemas por servicio
+            "services",
+            "internet_issue_category", "internet_issue_other",
+            "tv_issue_category", "tv_issue_other",
+            "other_issue_description",
+
+            # Evidencias
+            "photo1", "photo2", "photo3",
+
+            # Solo HFC
+            "hfc_problem_description",
+
+            # AGENDAMIENTO
+            "schedule_informed_datetime",
+            "schedule_informed_adult_required",
+            "schedule_informed_services",
+            "schedule_comments",
+
+            # Llegada
+            "arrival_within_slot", "identification_shown", "explained_before_start",
+            "arrival_comments",
+
+            # Proceso
+            "asked_equipment_location", "tidy_and_safe_install", "tidy_cabling",
+            "verified_signal_levels", "install_process_comments",
+
+            # Config/pruebas
+            "configured_router", "tested_device", "tv_functioning", "left_instructions",
+            "config_comments",
+
+            # Cierre
+            "reviewed_with_client", "got_consent_signature", "left_contact_info",
+            "closure_comments",
+
+            # Percepción / NPS
+            "perception_notes", "nps_process", "nps_technician", "nps_brand",
+
+            # Resolución / Gestión / Mala práctica
+            "resolution", "order_type", "info_type",
+            "malpractice_company_detail", "malpractice_installer_detail",
+
+            # Finalizar
+            "final_problem_description",
+
+            # Derivados (lectura)
+            "brand", "technology", "address", "commune",
+            "scheduled_date", "scheduled_block", "assigned_tech_id",
+        ]
+        read_only_fields = [
             "id", "created_at", "tecnico",
-            "marca", "tecnologia", "direccion", "comuna", "fecha", "bloque", "tecnico_id", "photos",
-        )
+            "brand", "technology", "address", "commune",
+            "scheduled_date", "scheduled_block", "assigned_tech_id",
+        ]
 
-    def get_photos(self, obj: AuditoriaVisita):
-        req = self.context.get("request")
-        urls = []
-        for f in (obj.photo1, obj.photo2, obj.photo3):
-            if f:
-                try:
-                    url = f.url
-                    if req is not None:
-                        url = req.build_absolute_uri(url)
-                    urls.append(url)
-                except Exception:
-                    pass
-        return urls
-
+    # --- Validaciones condicionales (reflejan .clean() del modelo) ---
     def validate(self, attrs):
-        # normalizamos customer_status si viene en minúsculas
-        raw_status = attrs.get("customer_status", None)
-        if raw_status is not None:
-            canon = _status_to_canonical(raw_status)
-            if canon is None:
-                raise serializers.ValidationError({"customer_status": "Valor inválido."})
-            attrs["customer_status"] = canon
-        else:
-            # si no viene en payload, usamos el de la instancia (update)
-            inst_status = getattr(self.instance, "customer_status", None)
-            if inst_status:
-                attrs["customer_status"] = _status_to_canonical(inst_status)
+        # Normaliza services a lista
+        services = attrs.get("services")
+        if services is None:
+            # si no viene en payload, no lo toques (para PATCH)
+            if self.instance is None:
+                attrs["services"] = []
+        # Reglas por servicio
+        final_services = (attrs.get("services")
+                          if attrs.get("services") is not None
+                          else (self.instance.services if self.instance else []))
+        sset = set(final_services or [])
 
-        # Si es REAGENDA, exigir fecha y bloque válidos (no pasados)
-        if attrs.get("customer_status") == "REAGENDA":
-            f = attrs.get("reschedule_date") or getattr(self.instance, "reschedule_date", None)
-            b = attrs.get("reschedule_block") or getattr(self.instance, "reschedule_block", None)
-            if not f or not b:
-                raise serializers.ValidationError("Debe indicar fecha y bloque de reagendamiento.")
-            if f < timezone.localdate():
+        # Internet -> requiere categoría; si 'otro', requiere texto
+        internet_cat = attrs.get("internet_issue_category",
+                                 getattr(self.instance, "internet_issue_category", ""))
+        internet_otro = attrs.get("internet_issue_other",
+                                  getattr(self.instance, "internet_issue_other", ""))
+        if "internet" in sset and not internet_cat:
+            raise serializers.ValidationError("Si marcaste 'Internet' debes elegir 'Categoría problema Internet'.")
+        if internet_cat == "otro" and not (internet_otro or "").strip():
+            raise serializers.ValidationError("Describe el 'Otro' de Internet.")
+
+        # TV -> requiere categoría; si 'otro', requiere texto
+        tv_cat = attrs.get("tv_issue_category",
+                           getattr(self.instance, "tv_issue_category", ""))
+        tv_otro = attrs.get("tv_issue_other",
+                            getattr(self.instance, "tv_issue_other", ""))
+        if "tv" in sset and not tv_cat:
+            raise serializers.ValidationError("Si marcaste 'TV' debes elegir 'Categoría problema TV'.")
+        if tv_cat == "otro" and not (tv_otro or "").strip():
+            raise serializers.ValidationError("Describe el 'Otro' de TV.")
+
+        # 'otro' en services -> exige descripción
+        otro_desc = attrs.get("other_issue_description",
+                              getattr(self.instance, "other_issue_description", "")) or ""
+        if "otro" in sset and not otro_desc.strip():
+            raise serializers.ValidationError("Describe el problema 'Otro'.")
+
+        # Si customer_status = REAGENDA y vienen campos, valida fecha/bloque (solo a nivel de auditoría)
+        cs = attrs.get("customer_status", getattr(self.instance, "customer_status", ""))
+        if cs == EstadoCliente.REAGENDA:
+            f = attrs.get("reschedule_date", getattr(self.instance, "reschedule_date", None))
+            b = attrs.get("reschedule_block", getattr(self.instance, "reschedule_block", ""))
+            if (f and f < timezone.localdate()):
                 raise serializers.ValidationError("La fecha reagendada no puede ser pasada.")
-            if _normalize_block(b) is None:
+            if b and b not in {"10-13", "14-18"}:
                 raise serializers.ValidationError("Bloque inválido (use 10-13 o 14-18).")
-            attrs["reschedule_block"] = _normalize_block(b)
 
         return attrs
 
+    # --- Create / Update ---
     def create(self, validated_data):
-        """
-        Reglas clave:
-        - Si customer_status == REAGENDA:
-            * Actualiza asignacion.reagendado_fecha / reagendado_bloque (NO toca asignacion.fecha)
-            * Mantiene estado actual; si estaba PENDIENTE la deja ASIGNADA
-            * HistorialAsignacion: REAGENDADA (detalles con fecha/bloque)
-            * (opcional) Registrar en tabla Reagendamiento si existe
-            * Notificación EMAIL al técnico asignado (si hay email y SMTP)
-        - Setea 'tecnico' con el usuario técnico que crea (si corresponde)
-        """
         request = self.context.get("request")
-        user = getattr(request, "user", None)
+        u = getattr(request, "user", None)
 
-        # si el usuario es técnico, se autoasigna como 'tecnico' de la auditoría
-        if user and getattr(user, "rol", None) == "tecnico":
-            validated_data["tecnico"] = user
+        asignacion = validated_data["asignacion"]
+        # Si es técnico: debe ser su asignación
+        if getattr(u, "rol", None) == "tecnico":
+            if getattr(asignacion, "asignado_a_id", None) != getattr(u, "id", None):
+                raise serializers.ValidationError("Solo puedes auditar asignaciones que te pertenecen.")
+            validated_data["tecnico"] = u  # guardamos quién creó
 
-        audit: AuditoriaVisita = super().create(validated_data)
+        return super().create(validated_data)
 
-        try:
-            asignacion: DireccionAsignada = audit.asignacion
-        except Exception:
-            asignacion = None
+    def update(self, instance, validated_data):
+        request = self.context.get("request")
+        u = getattr(request, "user", None)
 
-        # --- Reglas post-create
-        if asignacion:
-            status = audit.customer_status
+        # Si es técnico, no permitimos cambiar la asignación ni mover la auditoría a otra persona
+        if getattr(u, "rol", None) == "tecnico":
+            if "asignacion" in validated_data and validated_data["asignacion"].id != instance.asignacion_id:
+                raise serializers.ValidationError("No puedes cambiar la asignación de la auditoría.")
+            validated_data["tecnico"] = instance.tecnico or u
 
-            if status == "REAGENDA":
-                f = audit.reschedule_date
-                b = _normalize_block(audit.reschedule_block)
-
-                # Mantener estado; si estaba PENDIENTE, marcar ASIGNADA
-                new_estado = asignacion.estado
-                if new_estado == "PENDIENTE":
-                    new_estado = "ASIGNADA"
-
-                old_fecha = asignacion.reagendado_fecha
-                old_bloque = asignacion.reagendado_bloque
-
-                asignacion.reagendado_fecha = f
-                asignacion.reagendado_bloque = b
-                asignacion.estado = new_estado
-                asignacion.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
-
-                # Historial: REAGENDADA
-                HistorialAsignacion.objects.create(
-                    asignacion=asignacion,
-                    accion=HistorialAsignacion.Accion.REAGENDADA,
-                    detalles=f"Reagendada desde auditoría a {f} {b}",
-                    usuario=user,
-                )
-
-                # (opcional) Registrar en Reagendamiento si el modelo existe
-                try:
-                    from asignaciones.models import Reagendamiento
-                    Reagendamiento.objects.create(
-                        asignacion=asignacion,
-                        fecha_anterior=old_fecha,
-                        bloque_anterior=old_bloque,
-                        fecha_nueva=f,
-                        bloque_nuevo=b,
-                        usuario=user,
-                    )
-                except Exception:
-                    pass
-
-                # Notificación por email al técnico
-                dest = getattr(asignacion.asignado_a, "email", "") or ""
-                notif = Notificacion.objects.create(
-                    tipo="reagendo",
-                    asignacion=asignacion,
-                    canal=Notificacion.Canal.EMAIL if dest else Notificacion.Canal.NONE,
-                    destino=dest,
-                    provider="",
-                    payload={
-                        "asignacion_id": asignacion.id,
-                        "direccion": asignacion.direccion,
-                        "comuna": asignacion.comuna,
-                        "reagendado_fecha": str(f),
-                        "reagendado_bloque": b,
-                        "tecnico_id": getattr(user, "id", None),
-                        "tecnico_email": dest,
-                    },
-                    status=Notificacion.Estado.QUEUED,
-                )
-                if dest and enviar_notificacion_real:
-                    try:
-                        enviar_notificacion_real(notif)
-                    except Exception:
-                        # si falla el envío real, dejamos la notificación en cola
-                        pass
-
-            elif status == "AUTORIZA":
-                # Solo trazamos; NO tocamos estado de la asignación aquí
-                HistorialAsignacion.objects.create(
-                    asignacion=asignacion,
-                    accion=HistorialAsignacion.Accion.CERRADA,
-                    detalles="Auditoría: estado cliente 'Autoriza'.",
-                    usuario=user,
-                )
-            else:
-                # Otros estados -> traza genérica
-                HistorialAsignacion.objects.create(
-                    asignacion=asignacion,
-                    accion=HistorialAsignacion.Accion.ESTADO_CLIENTE,
-                    detalles=f"Auditoría: estado cliente = {status}.",
-                    usuario=user,
-                )
-
-        return audit
+        return super().update(instance, validated_data)
