@@ -17,11 +17,13 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, Sp
 
 from asignaciones.views import DireccionAsignadaViewSet
 from auditoria.views import AuditoriaVisitaViewSet
+from rest_framework.routers import DefaultRouter
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 router = routers.DefaultRouter()
 router.register(r'usuarios', usuarios_views.UsuarioViewSet, basename='usuarios')
 router.register(r'asignaciones', DireccionAsignadaViewSet, basename='asignaciones')
-router.register(r'auditorias',   AuditoriaVisitaViewSet, basename='auditorias')
+router.register(r'auditorias', AuditoriaVisitaViewSet, basename='auditorias')
 
 urlpatterns = [
     path('', lambda r: JsonResponse({
@@ -48,6 +50,8 @@ urlpatterns = [
     path('schema/', SpectacularAPIView.as_view(), name='schema'),
     path('docs/',   SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
     path('redoc/',  SpectacularRedocView.as_view(url_name='schema'),   name='redoc'),
+    path("api/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
+    path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
 ]
 
 if settings.DEBUG:

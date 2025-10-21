@@ -1,3 +1,4 @@
+# core/permissions.py
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 # === Helpers ===
@@ -27,24 +28,43 @@ class AdminFull_TechReadOnly(BasePermission):
 class AdminFull_TechReadOnlyPlusActions(BasePermission):
     """
     - Administrador: CRUD completo.
-    - Técnico: lectura + POST en acciones explícitas del ViewSet.
+    - Técnico: lectura + POST/PATCH en acciones explícitas del ViewSet.
       El ViewSet puede declarar:
-          tech_allowed_actions = {'asignarme', 'estado_cliente', 'reagendar', 'cerrar'}
+          tech_allowed_actions = {'asignarme','estado_cliente','reagendar','cerrar','partial_update', ...}
       Si no declara, se usa DEFAULT_ACTIONS.
     """
-    DEFAULT_ACTIONS = {"asignarme", "estado_cliente", "reagendar", "cerrar"}
+    DEFAULT_ACTIONS = {
+        # acciones declaradas con @action
+        "asignarme", "estado_cliente", "reagendar", "cerrar",
+        "historial", "historial_export",
+        "metrics_resumen", "metrics_tecnico", "metrics_serie", "metrics_export",
+        "export_metricas_get",
+        # acciones “built-in” de DRF
+        "partial_update",  # PATCH /{id}/
+    }
 
     def has_permission(self, request, view):
         user = request.user
         if not (user and user.is_authenticated):
             return False
+
         if _is_admin(user):
             return True
+
         if _is_tech(user):
+            # Lectura siempre permitida
             if request.method in SAFE_METHODS:
                 return True
+
+            action = getattr(view, "action", None)
             allowed = getattr(view, "tech_allowed_actions", self.DEFAULT_ACTIONS)
-            return (request.method == "POST") and (getattr(view, "action", None) in allowed)
+
+            # Permitimos POST y PATCH en acciones específicas (incluye partial_update)
+            if request.method in {"POST", "PATCH"} and (action in allowed or action == "partial_update"):
+                return True
+
+            return False
+
         return False
 
 

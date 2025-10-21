@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import DireccionAsignada, HistorialAsignacion
+from django.utils import timezone
 
 
 # === Serializadores base ===
@@ -101,18 +102,16 @@ class CargaCSVSerializer(serializers.Serializer):
 # === Acciones (formularios simples para el navegador de DRF) ===
 
 class AsignarmeActionSerializer(serializers.Serializer):
-    """
-    Solo para que el navegador de DRF muestre un botón/form de POST.
-    """
-    confirm = serializers.BooleanField(required=False, default=True)
+    para_hoy = serializers.BooleanField(required=False, default=False)
+    bloque = serializers.CharField(required=False, allow_blank=True)
 
 
 class EstadoClienteActionSerializer(serializers.Serializer):
     """
-    Q5: sólo escoger la opción. Si elige 'Reagendó', la API redirige
-    (303 See Other) a /estado_cliente/reagendar donde se exige fecha/bloque.
+    Serializer para la acción Q5 /estado_cliente/.
+    Solo escritura (write_only) para que el GET no intente serializar el modelo.
     """
-    ESTADOS = [
+    ESTADOS_Q5 = [
         ("autoriza", "Autoriza a ingresar"),
         ("sin_moradores", "Sin Moradores"),
         ("rechaza", "Rechaza"),
@@ -120,14 +119,33 @@ class EstadoClienteActionSerializer(serializers.Serializer):
         ("masivo", "Incidencia Masivo ClaroVTR"),
         ("reagendo", "Reagendó"),
     ]
-    estado_cliente = serializers.ChoiceField(choices=ESTADOS, write_only=True)
+    estado_cliente = serializers.ChoiceField(choices=ESTADOS_Q5, write_only=True, help_text="Seleccione el resultado de la visita (Q5).")
+    reagendado_fecha = serializers.DateField(
+        required=False, write_only=True,
+        input_formats=["%Y-%m-%d"],
+        help_text="Requerido si 'Reagendó'. Formato YYYY-MM-DD."
+    )
+    reagendado_bloque = serializers.ChoiceField(
+        required=False, write_only=True,
+        choices=[("10-13", "10:00 a 13:00"), ("14-18", "14:00 a 18:00")],
+        help_text="Requerido si 'Reagendó'."
+    )
 
 
 class ReagendarActionSerializer(serializers.Serializer):
-    """
-    Formulario dedicado a reagendamiento.
-    """
-    reagendado_fecha = serializers.DateField(help_text="YYYY-MM-DD (futuro)")
-    reagendado_bloque = serializers.ChoiceField(
-        choices=[("10-13", "10:00 a 13:00"), ("14-18", "14:00 a 18:00")]
+    fecha = serializers.DateField(
+        write_only=True,
+        input_formats=["%Y-%m-%d"],
+        help_text="Nueva fecha (YYYY-MM-DD, ≥ hoy).",
     )
+    # ChoiceField => DRF renderiza <select>
+    bloque = serializers.ChoiceField(
+        write_only=True,
+        choices=[("10-13", "10:00 a 13:00"), ("14-18", "14:00 a 18:00")],
+        help_text="Selecciona el bloque.",
+    )
+
+    def validate_fecha(self, val):
+        if str(val) < str(timezone.localdate()):
+            raise serializers.ValidationError("La fecha reagendada no puede ser pasada.")
+        return val
