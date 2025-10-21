@@ -98,6 +98,7 @@ export default function TecnicoReagendar() {
     const id = form.asignacion_id;
     const payload = { fecha: form.fecha, bloque: form.bloque };
     // si tu backend acepta motivo en este endpoint, lo incluimos:
+    await api.patch(`/api/asignaciones/${id}/`, { estado: "REAGENDADA" });
     if (form.motivo.trim()) payload.motivo = form.motivo.trim();
     return api.post(`/api/asignaciones/${id}/reagendar/`, payload);
   };

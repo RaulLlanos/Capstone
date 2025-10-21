@@ -1,4 +1,4 @@
-
+/* eslint-disable no-unused-vars */
 // src/pages/Tecnico.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -10,12 +10,14 @@ const TECNOLOGIAS = ["HFC", "NFTT", "FTTH"];
 const MARCAS = ["CLARO", "VTR"];
 const ZONAS = ["NORTE", "CENTRO", "SUR"];
 
-// === Utils ===
+// ------------------------ Utils ------------------------
 function normalizeList(data) {
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.results)) return data.results;
   return [];
 }
+
+// YYYY-MM-DD local
 function todayLocalYMD() {
   const d = new Date();
   const y = d.getFullYear();
@@ -23,6 +25,8 @@ function todayLocalYMD() {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
+
+// DD/MM/YYYY
 function ymdToDmy(s) {
   if (!s) return "—";
   const ymd = String(s).slice(0, 10);
@@ -31,7 +35,7 @@ function ymdToDmy(s) {
   return `${d.padStart(2, "0")}/${m.padStart(2, "0")}/${y}`;
 }
 
-// === Reagendamiento (efectivo) ===
+// --- fecha/bloque EFECTIVOS: prioriza reagendado_* ---
 function getEffectiveDate(it) {
   const r =
     it.reagendado_fecha ||
@@ -46,136 +50,51 @@ function getEffectiveBlock(it) {
     (it.reagendado && (it.reagendado.bloque || it.reagendado.reagendado_bloque)) ||
     it.reagendadoBloque ||
     it.reagendado_block;
-  return String(r || it.bloque || "");
+  return String(r || "");
 }
-function isReagendado(it) {
-  return Boolean(
-    it.reagendado_fecha ||
-      it.reagendado_bloque ||
-      (it.reagendado && (it.reagendado.fecha || it.reagendado.bloque)) ||
-      it.reagendadoFecha ||
-      it.reagendadoBloque ||
-      it.reagendado_date ||
-      it.reagendado_block ||
-      String(it.estado || "").toUpperCase() === "REAGENDADA"
-  );
-}
+
+// VISITADA en backend actual = completada
+const isCompletada = (it) => String(it.estado || "").toUpperCase() === "VISITADA";
+
+// ¿Mostrar badge “Reagendado”? sólo si estado es REAGENDADA y NO es hoy
 function showReagendadoBadge(it) {
   const eff = getEffectiveDate(it).slice(0, 10);
   const estado = String(it.estado || "").toUpperCase();
-  // Solo mostrar si realmente está REAGENDADA y no es hoy
   return estado === "REAGENDADA" && eff !== todayLocalYMD();
 }
-const isCompletada = (it) => {
-  const s = String(it.estado || "").toUpperCase();
-  return s === "VISITADA" || s === "COMPLETADA";
-};
 
-// === Identificación del técnico asignado (defensivo) ===
-function extractAssignedUser(item) {
-  // Posibles campos del backend:
-  // - tecnico: id | string | {id,email,...}
-  // - tecnico_id: number
-  // - tecnico_asignado: id | {id,email}
-  // - asignado_a: id | string | {id,email}
-  // - assigned_to / assigned / user: por si acaso
-  const out = { id: null, email: null };
-
-  const tryObj = (v) => {
-    if (!v || typeof v !== "object") return;
-    if (v.id != null) out.id = Number(v.id);
-    if (v.email) out.email = String(v.email).toLowerCase();
-    if (v.user && typeof v.user === "object") {
-      if (out.id == null && v.user.id != null) out.id = Number(v.user.id);
-      if (!out.email && v.user.email) out.email = String(v.user.email).toLowerCase();
-    }
-  };
-  const tryScalar = (v) => {
-    if (v == null || v === "") return;
-    if (typeof v === "number") out.id = v;
-    else if (typeof v === "string") {
-      const n = Number(v);
-      if (!Number.isNaN(n)) out.id = n;
-      else if (v.includes("@")) out.email = v.toLowerCase();
-    }
-  };
-
-  // orden de preferencia
-  if ("tecnico" in item) {
-    if (typeof item.tecnico === "object") tryObj(item.tecnico);
-    else tryScalar(item.tecnico);
-  }
-  if (out.id == null && "tecnico_id" in item) tryScalar(item.tecnico_id);
-  if (out.id == null && "tecnico_asignado" in item) {
-    if (typeof item.tecnico_asignado === "object") tryObj(item.tecnico_asignado);
-    else tryScalar(item.tecnico_asignado);
-  }
-  if (out.id == null && "asignado_a" in item) {
-    if (typeof item.asignado_a === "object") tryObj(item.asignado_a);
-    else tryScalar(item.asignado_a);
-  }
-  if (out.id == null && "assigned_to" in item) {
-    if (typeof item.assigned_to === "object") tryObj(item.assigned_to);
-    else tryScalar(item.assigned_to);
-  }
-  if (out.id == null && "assigned" in item) {
-    if (typeof item.assigned === "object") tryObj(item.assigned);
-    else tryScalar(item.assigned);
-  }
-  if (out.id == null && "user" in item) {
-    if (typeof item.user === "object") tryObj(item.user);
-    else tryScalar(item.user);
-  }
-
-  return out;
-}
-
-function belongsToUser(item, user) {
-  if (!user) return false;
-  const myId = user.id ?? null;
-  const myEmail = user.email ? String(user.email).toLowerCase() : null;
-
-  const assigned = extractAssignedUser(item);
-  const idMatch = myId != null && assigned.id === myId;
-  const emailMatch = myEmail && assigned.email && assigned.email === myEmail;
-  return Boolean(idMatch || emailMatch);
-}
-
+// ------------------------ Page ------------------------
 export default function Tecnico() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
   const [items, setItems] = useState([]);
-  const [sourceIsMine, setSourceIsMine] = useState(false); // si viene de /mias/ no filtramos por usuario
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [flash, setFlash] = useState("");
 
   const [q, setQ] = useState("");
-  const [filtro, setFiltro] = useState({ tecnologia: "", marca: "", zona: "" });
+  const [filtro, setFiltro] = useState({
+    tecnologia: "",
+    marca: "",
+    zona: "",
+  });
 
   const fetchId = useRef(0);
   const hoyYMD = todayLocalYMD();
   const hoyDMY = ymdToDmy(hoyYMD);
 
-
+  // ---------- Carga ----------
   const load = async () => {
     setLoading(true);
     setError("");
     const myFetch = ++fetchId.current;
     try {
-      let data = null;
-
-      // 1) Intentar /mias/
-      try {
-        const r1 = await api.get("/api/asignaciones/");
-        if (myFetch !== fetchId.current) return;
-        data = normalizeList(r1.data);
-        setSourceIsMine(true);          // ya vienen “las mías”
-      } catch { /* empty */ }
-
-      setItems(Array.isArray(data) ? data : []);
+      // Usamos exactamente el endpoint que te funciona:
+      const r = await api.get("/api/asignaciones"); // <- sin trailing slash
+      if (myFetch !== fetchId.current) return;
+      setItems(normalizeList(r.data));
     } catch (err) {
       console.error(err);
       setError("No se pudo cargar la lista de visitas.");
@@ -185,17 +104,15 @@ export default function Tecnico() {
     }
   };
 
-
   useEffect(() => {
     load();
   }, []);
 
-  // Hidratar reagendadas incompletas
+  // Hidratar reagendadas si viene bandera pero faltan reagendado_*
   useEffect(() => {
     const needDetail = (items || [])
+      .filter((it) => String(it.estado || "").toUpperCase() === "REAGENDADA")
       .filter((it) => {
-        const flagged = isReagendado(it);
-        if (!flagged) return false;
         const hasEffDate =
           it.reagendado_fecha ||
           (it.reagendado && (it.reagendado.fecha || it.reagendado.reagendado_fecha)) ||
@@ -204,8 +121,8 @@ export default function Tecnico() {
         return !hasEffDate;
       })
       .slice(0, 10);
-
     if (!needDetail.length) return;
+
     let cancelled = false;
     (async () => {
       try {
@@ -219,14 +136,16 @@ export default function Tecnico() {
         );
         if (cancelled || byId.size === 0) return;
         setItems((prev) => prev.map((it) => (byId.has(it.id) ? { ...it, ...byId.get(it.id) } : it)));
-      } catch { /* empty */ }
+      } catch {
+        /* silent */
+      }
     })();
     return () => {
       cancelled = true;
     };
   }, [items]);
 
-  // Flash de navegación
+  // Flash desde navigate(..., {state})
   useEffect(() => {
     const msg = location.state?.flash;
     if (msg) {
@@ -237,17 +156,17 @@ export default function Tecnico() {
     }
   }, [location.state, location.pathname, navigate]);
 
-  // Mis visitas filtradas (si viene de /mias/ no aplicamos belongsToUser)
+  // ---------- Filtrado en memoria ----------
   const misVisitas = useMemo(() => {
     const text = q.trim().toLowerCase();
-
     return (items || [])
-      .filter((it) => (sourceIsMine ? true : belongsToUser(it, user)))
-      .filter((it) => String(it.estado || "").toUpperCase() !== "VISITADA")
+      // OJO: NO filtramos por isMine(); el backend ya entrega “las mías”
+      .filter((it) => !isCompletada(it)) // ocultar VISITADA aquí
       .filter((it) => {
         if (filtro.tecnologia && String(it.tecnologia || "") !== filtro.tecnologia) return false;
         if (filtro.marca && String(it.marca || "") !== filtro.marca) return false;
         if (filtro.zona && String(it.zona || "") !== filtro.zona) return false;
+
         if (!text) return true;
         const bag = [
           it.direccion,
@@ -266,20 +185,22 @@ export default function Tecnico() {
         return bag.includes(text);
       })
       .sort((a, b) => getEffectiveDate(a).localeCompare(getEffectiveDate(b)));
-  }, [items, user, q, filtro, sourceIsMine]);
+  }, [items, q, filtro]);
 
-  // Hoy vs resto
   const visitasDeHoy = useMemo(
     () => misVisitas.filter((it) => getEffectiveDate(it).slice(0, 10) === hoyYMD),
     [misVisitas, hoyYMD]
   );
+
   const todasExceptoHoy = useMemo(
     () => misVisitas.filter((it) => getEffectiveDate(it).slice(0, 10) !== hoyYMD),
     [misVisitas, hoyYMD]
   );
 
+  // ---------- Navegación ----------
   const goReagendar = (id) => navigate(`/tecnico/reagendar/${id}`);
 
+  // Fecha/bloque a mostrar
   const renderFechaInfo = (it) => {
     const effDate = getEffectiveDate(it);
     const effBlock = getEffectiveBlock(it);
@@ -288,27 +209,45 @@ export default function Tecnico() {
     return parts.join(" · ");
   };
 
-  // Para hoy: reagendar + restaurar estado a ASIGNADA
+  // ---------- Acción: Para hoy ----------
   const setParaHoy = async (item, bloque = "10-13") => {
     try {
       await api.get("/auth/csrf").catch(() => {});
-      await api.post(`/api/asignaciones/${item.id}/reagendar/`, { fecha: hoyYMD, bloque });
+
+      // 1) Reagendar usando el endpoint NUEVO
+      await api.post(`/api/asignaciones/${item.id}/estado_cliente/`, {
+        estado_cliente: "reagendo",
+        reagendado_fecha: hoyYMD,
+        reagendado_bloque: bloque,
+      });
+
+      // 2) (Opcional) Si NO quieres que quede en "REAGENDADA" y prefieres mostrarla como "ASIGNADA":
+      //Esperar a Raul arregle este rol
       await api.patch(`/api/asignaciones/${item.id}/`, { estado: "ASIGNADA" });
 
+      // 3) Reflejo local inmediato
       setItems((prev) =>
         prev.map((it) =>
           it.id === item.id
-            ? { ...it, estado: "ASIGNADA", reagendado_fecha: hoyYMD, reagendado_bloque: bloque }
+            ? {
+                ...it,
+                estado: "ASIGNADA",           // o "REAGENDADA" si omites el PATCH anterior
+                reagendado_fecha: hoyYMD,
+                reagendado_bloque: bloque,
+              }
             : it
         )
       );
       setFlash("Asignación movida a HOY.");
     } catch (err) {
+      console.error("Mover a hoy falló:", err?.response?.status, err?.response?.data);
       const data = err?.response?.data || {};
       setError(data.detail || data.error || "No se pudo mover a hoy.");
     }
   };
 
+
+  // ------------------------ UI ------------------------
   return (
     <div className={styles.wrapper}>
       <div className={styles.card}>
@@ -316,7 +255,7 @@ export default function Tecnico() {
 
         <header className={styles.header}>
           <h1 className={styles.title}>Mis visitas</h1>
-          <p className={styles.subtitle}>Revisa tus asignaciones y las de <strong>hoy</strong>.</p>
+          <p className={styles.subtitle}>Revisa todas tus asignaciones y las de <strong>hoy</strong>.</p>
         </header>
 
         {/* Filtros */}
@@ -328,6 +267,7 @@ export default function Tecnico() {
             onChange={(e) => setQ(e.target.value)}
             disabled={loading}
           />
+
           <select
             className={styles.select}
             value={filtro.tecnologia}
@@ -335,8 +275,11 @@ export default function Tecnico() {
             disabled={loading}
           >
             <option value="">Tecnología</option>
-            {TECNOLOGIAS.map((t) => <option key={t} value={t}>{t}</option>)}
+            {TECNOLOGIAS.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
           </select>
+
           <select
             className={styles.select}
             value={filtro.marca}
@@ -344,8 +287,11 @@ export default function Tecnico() {
             disabled={loading}
           >
             <option value="">Marca</option>
-            {MARCAS.map((m) => <option key={m} value={m}>{m}</option>)}
+            {MARCAS.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
           </select>
+
           <select
             className={styles.select}
             value={filtro.zona}
@@ -353,14 +299,16 @@ export default function Tecnico() {
             disabled={loading}
           >
             <option value="">Zona</option>
-            {ZONAS.map((z) => <option key={z} value={z}>{z}</option>)}
+            {ZONAS.map((z) => (
+              <option key={z} value={z}>{z[0] + z.slice(1).toLowerCase()}</option>
+            ))}
           </select>
         </div>
 
-        {error && <div className={styles.error}>{error}</div>}
-        {loading && <div className={styles.helper}>Cargando…</div>}
+        {error && <div className={styles.error} style={{ marginTop: 8 }}>{error}</div>}
+        {loading && <div className={styles.helper} style={{ marginTop: 8 }}>Cargando…</div>}
 
-        {/* Hoy */}
+        {/* Visitas de hoy */}
         <section style={{ marginTop: 16 }}>
           <h2 className={styles.sectionTitle}>Visitas de hoy ({hoyDMY})</h2>
           <div className={styles.listGrid}>
@@ -370,12 +318,14 @@ export default function Tecnico() {
                   <strong>{it.direccion}</strong>
                   <small className={styles.helper}>{renderFechaInfo(it)}</small>
                 </div>
+
                 <div className={styles.helper}>
                   Comuna: {it.comuna} — Zona: {it.zona} — Marca: {it.marca} — Tec.: {it.tecnologia}
                 </div>
                 <div className={styles.helper}>
                   RUT cliente: {it.rut_cliente} · ID vivienda: {it.id_vivienda} · Encuesta: {it.encuesta}
                 </div>
+
                 <div className={styles.actions}>
                   <button
                     className={styles.button}
@@ -401,7 +351,7 @@ export default function Tecnico() {
           </div>
         </section>
 
-        {/* Resto */}
+        {/* Todas mis visitas (excepto hoy) */}
         <section style={{ marginTop: 20 }}>
           <h2 className={styles.sectionTitle}>Todas mis visitas</h2>
           <div className={styles.listGrid}>
@@ -411,12 +361,14 @@ export default function Tecnico() {
                   <strong>{it.direccion}</strong>
                   <small className={styles.helper}>{renderFechaInfo(it)}</small>
                 </div>
+
                 <div className={styles.helper}>
                   Comuna: {it.comuna} — Zona: {it.zona} — Marca: {it.marca} — Tec.: {it.tecnologia}
                 </div>
                 <div className={styles.helper}>
                   RUT cliente: {it.rut_cliente} · ID vivienda: {it.id_vivienda} · Encuesta: {it.encuesta}
                 </div>
+
                 <div className={styles.actions}>
                   {showReagendadoBadge(it) && (
                     <span className={`${styles.badge} ${styles.badgeReagendado}`}>Reagendado</span>
