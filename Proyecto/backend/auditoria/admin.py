@@ -6,17 +6,23 @@ from django.utils.html import format_html
 from .models import (
     AuditoriaVisita,
     Tri,
-    EstadoCliente,
-    SERVICIO_CHOICES,
+    EstadoCliente,   # lo puedes usar si te sirve para choices en otros lados
 )
 
-# -----------------------------
-# Form con widgets adecuados
-# -----------------------------
+# ✅ Fallback local de opciones para los checkboxes de "service_issues"
+#    (no dependemos de constantes del models.py)
+SERVICE_ISSUES_CHOICES = (
+    ("internet", "Internet"),
+    ("tv", "TV"),
+    ("fono", "Fono"),
+    ("otro", "Otro"),
+)
+
+
 class AuditoriaVisitaForm(forms.ModelForm):
-    # JSONField -> checkboxes múltiples (Q8: servicios con problema)
+    # checkboxes múltiples desde JSONField
     service_issues = forms.MultipleChoiceField(
-        choices=SERVICIO_CHOICES,
+        choices=SERVICE_ISSUES_CHOICES,
         required=False,
         widget=forms.CheckboxSelectMultiple
     )
@@ -25,27 +31,32 @@ class AuditoriaVisitaForm(forms.ModelForm):
         model = AuditoriaVisita
         exclude = ()
         widgets = {
-            # Radios para todos los campos Tri
+            # Radios para Tri
             "ont_modem_ok": forms.RadioSelect,
+
             "schedule_informed_datetime": forms.RadioSelect,
             "schedule_informed_adult_required": forms.RadioSelect,
             "schedule_informed_services": forms.RadioSelect,
+
             "arrival_within_slot": forms.RadioSelect,
             "identification_shown": forms.RadioSelect,
             "explained_before_start": forms.RadioSelect,
+
             "asked_equipment_location": forms.RadioSelect,
             "tidy_and_safe_install": forms.RadioSelect,
             "tidy_cabling": forms.RadioSelect,
             "verified_signal_levels": forms.RadioSelect,
+
             "configured_router": forms.RadioSelect,
             "tested_device": forms.RadioSelect,
             "tv_functioning": forms.RadioSelect,
             "left_instructions": forms.RadioSelect,
+
             "reviewed_with_client": forms.RadioSelect,
             "got_consent_signature": forms.RadioSelect,
             "left_contact_info": forms.RadioSelect,
 
-            # Selects para campos con choices
+            # Selects por defecto para CharField con choices
             "customer_status": forms.Select,
             "internet_issue_category": forms.Select,
             "tv_issue_category": forms.Select,
@@ -57,29 +68,25 @@ class AuditoriaVisitaForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # Inicializa checkboxes desde JSON list del modelo
+        # Inicializar checkboxes desde JSON list
         if self.instance and self.instance.pk and isinstance(self.instance.service_issues, list):
             self.fields["service_issues"].initial = self.instance.service_issues
 
         # Ayudas
         if "reschedule_slot" in self.fields:
-            self.fields["reschedule_slot"].help_text = "Usar 10-13 o 14-18"
-
-        for nps_field in ("nps_process", "nps_technician", "nps_brand"):
-            if nps_field in self.fields:
-                self.fields[nps_field].help_text = "Rango 0 a 10"
+            self.fields["reschedule_slot"].help_text = "Use 10-13 o 14-18"
+        for nps in ("nps_process", "nps_technician", "nps_brand"):
+            if nps in self.fields:
+                self.fields[nps].help_text = "Rango 0 a 10"
 
     def clean(self):
         cleaned = super().clean()
-        # Persistir service_issues (lista) al JSONField del modelo
+        # Persistir checkboxes al JSONField
         servicios = cleaned.get("service_issues") or []
         self.instance.service_issues = list(servicios)
         return cleaned
 
 
-# -----------------------------
-# Admin
-# -----------------------------
 @admin.register(AuditoriaVisita)
 class AuditoriaVisitaAdmin(admin.ModelAdmin):
     form = AuditoriaVisitaForm
@@ -96,6 +103,9 @@ class AuditoriaVisitaAdmin(admin.ModelAdmin):
         "photo2_thumb",
         "photo3_thumb",
     )
+
+    # 👇 Estos filtros requieren que 'resolution' e 'info_type' EXISTAN en el modelo
+    #    (ya los tienes tras la migración 0007). Si aún no migras, comenta estas dos líneas.
     list_filter = (
         "customer_status",
         "ont_modem_ok",
@@ -103,8 +113,9 @@ class AuditoriaVisitaAdmin(admin.ModelAdmin):
         "info_type",
         ("created_at", admin.DateFieldListFilter),
     )
+
     search_fields = ("asignacion__direccion", "asignacion__comuna", "tecnico__email")
-    readonly_fields = ("created_at", "photo1_thumb", "photo2_thumb", "photo3_thumb")
+    readonly_fields = ("created_at",)
 
     fieldsets = (
         ("Identificación", {
@@ -117,7 +128,7 @@ class AuditoriaVisitaAdmin(admin.ModelAdmin):
         ("Estado y equipos", {
             "fields": ("ont_modem_ok",)
         }),
-        ("Servicio con problema (equiv. Q8–Q11)", {
+        ("Servicio con problema", {
             "fields": (
                 "service_issues",
                 ("internet_issue_category", "internet_issue_other"),
@@ -176,33 +187,35 @@ class AuditoriaVisitaAdmin(admin.ModelAdmin):
         }),
         ("Metadatos", {
             "classes": ("collapse",),
-            "fields": ("created_at", "photo1_thumb", "photo2_thumb", "photo3_thumb")
+            "fields": ("created_at",)
         }),
     )
 
-    # Helpers de visualización
+    # Helpers
     def asignacion_str(self, obj):
         a = obj.asignacion
         return f"{a.direccion} ({a.comuna})" if a else "-"
     asignacion_str.short_description = "Dirección"
 
     def services_str(self, obj):
-        vals = obj.service_issues or []
-        if not vals:
+        if not obj.service_issues:
             return "-"
-        label_by_val = dict(SERVICIO_CHOICES)
-        return ", ".join(label_by_val.get(v, v) for v in vals)
+        label_by_val = dict(SERVICE_ISSUES_CHOICES)
+        return ", ".join(label_by_val.get(v, v) for v in obj.service_issues)
     services_str.short_description = "Servicios"
 
-    # Thumbnails de fotos (solo lectura)
+    # Thumbnails de fotos
     def _thumb(self, filefield):
         if not filefield:
             return "-"
-        return format_html('<img src="{}" style="height:40px;border-radius:4px;" />', filefield.url)
+        try:
+            return format_html('<img src="{}" style="height:40px;border-radius:4px;" />', filefield.url)
+        except Exception:
+            return "-"
 
-    def photo1_thumb(self, obj): return self._thumb(obj.photo1)
-    def photo2_thumb(self, obj): return self._thumb(obj.photo2)
-    def photo3_thumb(self, obj): return self._thumb(obj.photo3)
+    def photo1_thumb(self, obj): return self._thumb(getattr(obj, "photo1", None))
+    def photo2_thumb(self, obj): return self._thumb(getattr(obj, "photo2", None))
+    def photo3_thumb(self, obj): return self._thumb(getattr(obj, "photo3", None))
 
     photo1_thumb.short_description = "Foto 1"
     photo2_thumb.short_description = "Foto 2"

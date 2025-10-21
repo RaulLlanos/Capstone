@@ -1,4 +1,3 @@
-# auditoria/models.py
 from django.db import models
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -21,15 +20,15 @@ class EstadoCliente(models.TextChoices):
     REAGENDA      = "REAGENDA", "Reagendó"
 
 
-# Q8: servicios con problema
-SERVICIO_CHOICES = (
+# Servicios con problema (equiv. Q8)
+SERVICE_CHOICES = (
     ("internet", "Internet"),
     ("tv", "TV"),
     ("fono", "Fono"),
     ("otro", "Otro"),
 )
 
-# Q9: categorías problema Internet
+# Categorías problema Internet (equiv. Q9)
 INTERNET_ISSUE_CHOICES = (
     ("lento", "Navegaba muy lento"),
     ("wifi_alcance", "Señal del Wifi con bajo alcance"),
@@ -38,19 +37,19 @@ INTERNET_ISSUE_CHOICES = (
     ("otro", "Otro"),
 )
 
-# Q10: categorías problema TV
+# Categorías problema TV (equiv. Q10)
 TV_ISSUE_CHOICES = (
     ("sin_senal", "Me quedaba sin señal de TV"),
     ("pixelado", "Se pixelaba la imagen de TV"),
     ("intermitencia", "Intermitencia de la Señal"),
     ("desfase", "Presenta desfase con la señal en vivo"),
     ("streaming", "Problemas con Plataforma de Streaming"),
-    ("zapping", "Problemas para hacer Zapping (lentitud)"),
+    ("zapping", "Problemas con zapping (lentitud)"),
     ("equipos", "Problemas con Equipos (Dbox, Control, IPTV)"),
     ("otro", "Otro"),
 )
 
-# Q29/Q30/Q31/Q32
+# Resolución / gestión (equiv. Q29–Q32)
 RESOLUTION_CHOICES = (
     ("terreno", "Se solucionó en terreno"),
     ("orden", "Se realizó una gestión con Orden"),
@@ -66,9 +65,8 @@ INFO_TYPE_CHOICES = (
 
 
 def _upload_auditoria(instance, filename):
-    # Incluye el ID en la ruta (si no existe todavía, usa 'tmp')
-    obj_id = instance.id or "tmp"
-    return f"auditorias/{obj_id}/{filename}"
+    # Ej: auditorias/123/foto.jpg (si aún no existe id, usa 'tmp')
+    return f"auditorias/{getattr(instance, 'id', None) or 'tmp'}/{filename}"
 
 
 class AuditoriaVisita(models.Model):
@@ -76,15 +74,14 @@ class AuditoriaVisita(models.Model):
     asignacion = models.ForeignKey(DireccionAsignada, on_delete=models.CASCADE, related_name="auditorias")
     tecnico = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
 
-    # Q5 Estado del Cliente
+    # Estado del cliente (Q5)
     customer_status = models.CharField(
         max_length=20,
         choices=EstadoCliente.choices,
         blank=True,
-        db_column="estado_cliente",
     )
 
-    # Reagendamiento observado en auditoría
+    # Reagendamiento observado en auditoría (Q6–Q7)
     reschedule_date = models.DateField(null=True, blank=True, db_column="reagendado_fecha")
     reschedule_slot = models.CharField(
         max_length=10, blank=True,
@@ -92,40 +89,36 @@ class AuditoriaVisita(models.Model):
         db_column="reagendado_bloque",
     )
 
-    # Q72 ONT/Modem correctamente instalado
-    ont_modem_ok = models.PositiveSmallIntegerField(
-        choices=Tri.choices,
-        default=Tri.NA,
-        db_column="q72_ont_ok",
-    )
+    # ONT/Modem correctamente instalado (Q72)
+    ont_modem_ok = models.PositiveSmallIntegerField(choices=Tri.choices, default=Tri.NA)
 
-    # Q8 Servicio(s) con problema (checkboxes)
-    service_issues = models.JSONField(default=list, blank=True, db_column="q8_servicios")
+    # Servicio(s) con problema (checkboxes) (Q8)
+    service_issues = models.JSONField(default=list, blank=True, db_column="servicios")
 
-    # Q9 (si incluye Internet)
+    # Internet (Q9)
     internet_issue_category = models.CharField(
         max_length=32, choices=INTERNET_ISSUE_CHOICES, blank=True, db_column="q9_internet_categoria"
     )
     internet_issue_other = models.CharField(max_length=200, blank=True, db_column="q9_internet_otro")
 
-    # Q10 (si incluye TV)
+    # TV (Q10)
     tv_issue_category = models.CharField(
         max_length=32, choices=TV_ISSUE_CHOICES, blank=True, db_column="q10_tv_categoria"
     )
     tv_issue_other = models.CharField(max_length=200, blank=True, db_column="q10_tv_otro")
 
-    # Q11 (si incluye “Otro” en servicios)
+    # Otro (Q11)
     other_issue_description = models.TextField(blank=True, db_column="q11_otro_descripcion")
 
-    # Evidencias Q13–Q15
+    # Evidencias (Q13–Q15) – fotos reales
     photo1 = models.ImageField(upload_to=_upload_auditoria, blank=True, null=True, db_column="foto1")
     photo2 = models.ImageField(upload_to=_upload_auditoria, blank=True, null=True, db_column="foto2")
     photo3 = models.ImageField(upload_to=_upload_auditoria, blank=True, null=True, db_column="foto3")
 
-    # Q73 (solo si tecnología = HFC)
+    # Solo HFC (Q73)
     hfc_problem_description = models.TextField(blank=True, db_column="q73_desc_hfc")
 
-    # Bloque AGENDAMIENTO (Q16) + comentarios (Q71)
+    # AGENDAMIENTO (Q16) + comentarios (Q71)
     schedule_informed_datetime = models.PositiveSmallIntegerField(
         choices=Tri.choices, default=Tri.NA, db_column="agend_inf_fecha_hora"
     )
@@ -137,7 +130,7 @@ class AuditoriaVisita(models.Model):
     )
     schedule_comments = models.TextField(blank=True, db_column="q71_agend_comentarios")
 
-    # Llegada del técnico (Q17) + comentarios (Q18)
+    # Llegada del técnico (Q17/Q18)
     arrival_within_slot = models.PositiveSmallIntegerField(
         choices=Tri.choices, default=Tri.NA, db_column="llego_en_horario"
     )
@@ -149,7 +142,7 @@ class AuditoriaVisita(models.Model):
     )
     arrival_comments = models.TextField(blank=True, db_column="q18_llegada_comentarios")
 
-    # Proceso de instalación (Q19) + comentarios (Q20)
+    # Proceso instalación (Q19/Q20)
     asked_equipment_location = models.PositiveSmallIntegerField(
         choices=Tri.choices, default=Tri.NA, db_column="consulto_ubicacion"
     )
@@ -164,7 +157,7 @@ class AuditoriaVisita(models.Model):
     )
     install_process_comments = models.TextField(blank=True, db_column="q20_proceso_comentarios")
 
-    # Configuración y pruebas (Q21) + comentarios (Q22)
+    # Configuración y pruebas (Q21/Q22)
     configured_router = models.PositiveSmallIntegerField(
         choices=Tri.choices, default=Tri.NA, db_column="config_router"
     )
@@ -179,7 +172,7 @@ class AuditoriaVisita(models.Model):
     )
     config_comments = models.TextField(blank=True, db_column="q22_config_comentarios")
 
-    # Cierre (Q23) + comentarios (Q24)
+    # Cierre visita técnica (Q23/Q24)
     reviewed_with_client = models.PositiveSmallIntegerField(
         choices=Tri.choices, default=Tri.NA, db_column="revision_con_cliente"
     )
@@ -191,13 +184,13 @@ class AuditoriaVisita(models.Model):
     )
     closure_comments = models.TextField(blank=True, db_column="q24_cierre_comentarios")
 
-    # Percepción y NPS
+    # Percepción / NPS (Q25–Q28)
     perception_notes = models.TextField(blank=True, db_column="q25_percepcion")
-    nps_process = models.PositiveSmallIntegerField(null=True, blank=True, db_column="nps_proceso")          # Q26 (0–10)
-    nps_technician = models.PositiveSmallIntegerField(null=True, blank=True, db_column="nps_tecnico")       # Q27 (0–10)
-    nps_brand = models.PositiveSmallIntegerField(null=True, blank=True, db_column="nps_claro_vtr")          # Q28 (0–10)
+    nps_process = models.PositiveSmallIntegerField(null=True, blank=True, db_column="nps_proceso")
+    nps_technician = models.PositiveSmallIntegerField(null=True, blank=True, db_column="nps_tecnico")
+    nps_brand = models.PositiveSmallIntegerField(null=True, blank=True, db_column="nps_claro_vtr")
 
-    # Solución y gestión (Q29–Q32)
+    # Solución / Gestión / Info (Q29–Q32)
     resolution = models.CharField(max_length=16, choices=RESOLUTION_CHOICES, blank=True, db_column="solucion_gestion")
     order_type = models.CharField(max_length=16, choices=ORDER_TYPE_CHOICES, blank=True, db_column="orden_tipo")
     info_type = models.CharField(max_length=20, choices=INFO_TYPE_CHOICES, blank=True, db_column="info_tipo")
@@ -213,25 +206,26 @@ class AuditoriaVisita(models.Model):
         ordering = ["-created_at", "-id"]
 
     def __str__(self):
-        return f"Auditoría #{self.id or 'nuevo'} - {self.asignacion.direccion} ({self.asignacion.comuna})"
+        a = getattr(self, "asignacion", None)
+        return f"Auditoría #{self.id or 'nuevo'} - {a.direccion if a else '-'} ({a.comuna if a else '-'})"
 
     # Validaciones condicionales
     def clean(self):
         selected = set(self.service_issues or [])
 
-        # Si hay Internet => requiere categoría
+        # Internet => requiere categoría
         if "internet" in selected and not self.internet_issue_category:
-            raise ValidationError("Si marcaste 'Internet' debes elegir la categoría del problema (Internet).")
+            raise ValidationError("Si marcaste 'Internet', elige la categoría del problema.")
         if self.internet_issue_category == "otro" and not self.internet_issue_other:
             raise ValidationError("Describe el 'Otro' de Internet.")
 
-        # Si hay TV => requiere categoría
+        # TV => requiere categoría
         if "tv" in selected and not self.tv_issue_category:
-            raise ValidationError("Si marcaste 'TV' debes elegir la categoría del problema (TV).")
+            raise ValidationError("Si marcaste 'TV', elige la categoría del problema.")
         if self.tv_issue_category == "otro" and not self.tv_issue_other:
             raise ValidationError("Describe el 'Otro' de TV.")
 
-        # Si hay 'otro' en servicios => exige detalle
+        # 'Otro' en servicios => exige detalle
         if "otro" in selected and not (self.other_issue_description or "").strip():
             raise ValidationError("Describe el 'Otro' (servicios).")
 
@@ -245,6 +239,6 @@ class AuditoriaVisita(models.Model):
                 raise ValidationError("Agrega detalle de mala práctica (empresa o instalador).")
 
         # NPS 0–10
-        for nps_value in (self.nps_process, self.nps_technician, self.nps_brand):
-            if nps_value is not None and (nps_value < 0 or nps_value > 10):
+        for nps in (self.nps_process, self.nps_technician, self.nps_brand):
+            if nps is not None and (nps < 0 or nps > 10):
                 raise ValidationError("Las puntuaciones NPS deben estar entre 0 y 10.")
