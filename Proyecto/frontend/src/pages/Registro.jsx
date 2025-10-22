@@ -5,7 +5,7 @@ import styles from "./Login.module.css";
 
 const ROLES = [
   { value: "tecnico", label: "Técnico" },
-  { value: "auditor", label: "Auditor" },
+  { value: "administrador", label: "Administrador" },
 ];
 
 const USERS_PATH = "/api/usuarios";
