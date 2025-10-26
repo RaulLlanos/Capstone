@@ -1,3 +1,5 @@
+# asignaciones/views.py
+
 from datetime import datetime
 import csv
 import io
@@ -30,12 +32,12 @@ from .serializers import (
     CsvRowResult,
     CargaCSVSerializer,
     AsignarmeActionSerializer,
-    EstadoClienteActionSerializer,
+    EstadoClienteActionSerializer,   # ← usamos este (con motivo opcional)
     ReagendarActionSerializer,
 )
 
-# Notificaciones
-from core.models import Notificacion
+# Notificaciones y logs
+from core.models import Notificacion, LogSistema
 from core.notify import enviar_notificacion_real
 
 
@@ -54,6 +56,9 @@ _HEADER_ALIASES = {
     "comuna": [
         "comuna_cliente", "comuna", "comuna del cliente", "comuna_del_cliente"
     ],
+    "zona": [
+        "zona_cliente", "customer_zone", "zona"  # ← normalizamos a NORTE/SUR/ORIENTE
+    ],
     "marca": ["marca", "brand"],
     "tecnologia": ["tecnologia", "customer_network_type"],
     "encuesta": ["encuesta", "encuesta de origen", "survey_type"],
@@ -62,7 +67,11 @@ _HEADER_ALIASES = {
     "bloque": ["bloque", "bloque_horario", "bloque horario reagendamiento"],
     "asignado_email": ["asignado_email", "correo_tecnico", "tecnico_email", "email_tecnico"],
 }
-_DATE_FORMATS = ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d")
+
+_DATE_FORMATS = (
+    "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d",
+    "%Y-%m-%d %H:%M:%S", "%d-%m-%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y/%m/%d %H:%M:%S",
+)
 
 def _norm(s: str) -> str:
     if s is None: return ""
@@ -90,13 +99,22 @@ def _build_header_map(raw_headers: List[str]) -> Dict[str, str]:
 
 def _parse_date(val):
     if not val: return None
+    # Si ya viene datetime (openpyxl), extrae date
     if hasattr(val, "year"):
         try: return val.date() if hasattr(val, "date") else val
         except Exception: pass
-    val = _s(val)
+    s = _s(val)
     for fmt in _DATE_FORMATS:
-        try: return datetime.strptime(val, fmt).date()
+        try: return datetime.strptime(s, fmt).date()
         except Exception: pass
+    # fallback: toma la parte de fecha antes del espacio
+    try:
+        only_date = s.split()[0]
+        for fmt in ("%Y-%m-%d","%d-%m-%Y","%d/%m/%Y","%Y/%m/%d"):
+            try: return datetime.strptime(only_date, fmt).date()
+            except Exception: pass
+    except Exception:
+        pass
     return None
 
 def _normalize_bloque(val: str) -> str | None:
@@ -167,7 +185,81 @@ def _parse_estado_cliente_from_request(data: Dict[str, Any]) -> str | None:
     }
     return synonyms.get(key)
 
-# ---------- núcleo de reagendamiento (no cambia estado a REAGENDADA) ----------
+# ---------- Normalizadores de zona / comuna ----------
+def _norm_zona(v: str) -> str | None:
+    v = _s(v).upper()
+    if not v: return None
+    v = v.replace("ZONA METROPOLITANA", "").replace("ZONA", "").strip()
+    if v.startswith("NORTE"):   return "NORTE"
+    if v.startswith("SUR"):     return "SUR"
+    # ORIENTE/CENTRO normaliza a ORIENTE (criterio actual)
+    if v.startswith("ORIENTE") or v.startswith("CENTRO"):
+        return "ORIENTE"
+    return None
+
+_COMUNA_ALIASES = {
+    "MACU": "Macul",
+    "QNOR": "Quinta Normal",
+    "MAIP": "Maipú",
+    "PROV": "Providencia",
+    "LREI": "La Reina",
+    "PENA": "Peñalolén",
+    "LFLO": "La Florida",
+    "PALT": "Puente Alto",
+    "RECO": "Recoleta",
+    "CERR": "Cerrillos",
+    "SBER": "San Bernardo",
+    "NUNO": "Ñuñoa",
+    "LCON": "Las Condes",
+    "QUIL": "Quilicura",
+    "CNCH": "Conchalí",
+    "SMGL": "San Miguel",
+    "ELBO": "El Bosque",
+    "LPRA": "Lo Prado",
+    "VITA": "Vitacura",
+    "COLI": "Colina",
+    "RENC": "Renca",
+    "ECEN": "Estación Central",
+    "LACI": "La Cisterna",
+    "INDE": "Independencia",
+    "PACE": "Pedro Aguirre Cerda",
+    "LGRA": "La Granja",
+    "CNAV": "Cerro Navia",
+    "LBAR": "Lo Barnechea",
+    "HUEC": "Huechuraba",
+    "PUDA": "Pudahuel",
+    "LAMP": "Lampa",
+    "SJOA": "San Joaquín",
+    "SJOS": "San José de Maipo",
+    "PHUR": "Padre Hurtado",
+    "IMAI": "Isla de Maipo",
+    "CTAN": "Calera de Tango",
+}
+
+_COMUNA_CANON = {
+    "NUNOA": "Ñuñoa",
+    "PENALOLEN": "Peñalolén",
+    "LAS CONDES": "Las Condes",
+    "ESTACION CENTRAL": "Estación Central",
+    "SAN MIGUEL": "San Miguel",
+}
+
+def _norm_comuna(v: str) -> str:
+    raw = _s(v)
+    if not raw:
+        return ""
+    u = raw.strip().upper()
+    if u in _COMUNA_ALIASES:
+        return _COMUNA_ALIASES[u]
+    if u in _COMUNA_CANON:
+        return _COMUNA_CANON[u]
+    try:
+        return raw.strip().title()
+    except Exception:
+        return raw.strip()
+
+
+# ---------- núcleo de reagendamiento ----------
 def _bloque_label(b):
     return "10:00 a 13:00" if b == "10-13" else ("14:00 a 18:00" if b == "14-18" else (b or "-"))
 
@@ -185,8 +277,7 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
     asignacion.estado = new_estado
     asignacion.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
 
-    # --- Historial: usar tu choice REAGENDADA ---
-    from .models import HistorialAsignacion
+    # Historial
     accion_val = getattr(HistorialAsignacion.Accion, "REAGENDADA", "REAGENDADA")
     detalles = (
         f"Reagendada: "
@@ -196,9 +287,19 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
     HistorialAsignacion.objects.create(
         asignacion=asignacion,
         accion=accion_val,
-        detalles=detalles,
+        detalles=detalles if not motivo else f"{detalles} | Motivo: {motivo}",
         usuario=usuario,
     )
+
+    # Log sensible
+    try:
+        LogSistema.objects.create(
+            usuario=usuario if getattr(usuario, "is_authenticated", False) else None,
+            accion=getattr(LogSistema.Accion, "ASSIGN_REAGENDAR", "ASSIGN_REAGENDAR"),
+            detalle=f"Reagendó asignación #{asignacion.id} -> {fecha} {bloque}. Motivo: {motivo or '-'}",
+        )
+    except Exception:
+        pass
 
     # (opcional) registro en tabla Reagendamiento si existe
     try:
@@ -209,6 +310,7 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
             bloque_anterior=old_bloque,
             fecha_nueva=fecha,
             bloque_nuevo=bloque,
+            motivo=(motivo or "REAGENDAMIENTO"),
             usuario=usuario,
         )
     except Exception:
@@ -216,8 +318,6 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
 
     # Notificación email al técnico (si tiene correo)
     dest = getattr(asignacion.asignado_a, "email", "") or ""
-    from core.models import Notificacion
-    from core.notify import enviar_notificacion_real
     notif = Notificacion.objects.create(
         tipo="reagendo",
         asignacion=asignacion,
@@ -239,7 +339,6 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
         enviar_notificacion_real(notif)
 
 
-
 # ---------------------------------------------------
 class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     """
@@ -249,7 +348,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     queryset = DireccionAsignada.objects.all().order_by("-created_at")
     serializer_class = DireccionAsignadaSerializer
     permission_classes = [IsAuthenticated, AdminFull_TechReadOnlyPlusActions]
-    tech_allowed_actions = {"asignarme", "estado_cliente", "reagendar"}
+    tech_allowed_actions = {"asignarme", "desasignarme", "estado_cliente", "reagendar"}
 
     filterset_fields = ["estado", "comuna", "zona", "marca", "tecnologia", "encuesta", "asignado_a"]
     search_fields = ["direccion", "comuna", "rut_cliente", "id_vivienda"]
@@ -281,7 +380,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         return qs
 
     # ---------- ASIGNARME (técnico) ----------
-    @extend_schema(request=AsignarmeActionSerializer)
+    @extend_schema(request=AsignarmeActionSerializer, responses=DireccionAsignadaSerializer)
     @action(detail=True, methods=["get", "post"], url_path="asignarme", serializer_class=AsignarmeActionSerializer)
     def asignarme(self, request, pk=None):
         obj = self.get_object()
@@ -313,15 +412,74 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             obj.estado = "ASIGNADA"
         obj.save(update_fields=["asignado_a", "estado", "updated_at"])
 
-        # Solo historial de asignación (SIN reagendamiento automático)
         HistorialAsignacion.objects.create(
             asignacion=obj,
-            accion="ASIGNADA",
+            accion=HistorialAsignacion.Accion.ASIGNADA_TECNICO,
             detalles=f"Asignada a {u.email}.",
             usuario=u,
         )
-        return Response(self.get_serializer(obj).data)
+        # Log sensible
+        try:
+            LogSistema.objects.create(
+                usuario=u,
+                accion=getattr(LogSistema.Accion, "ASSIGN_SELF", "ASSIGN_SELF"),
+                detalle=f"Técnico {u.email} se asignó la visita #{obj.id}",
+            )
+        except Exception:
+            pass
 
+        # responder con la dirección completa
+        return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
+
+    # ---------- DESASIGNARME (técnico) ----------
+    @action(detail=True, methods=["post"], url_path="desasignarme")
+    def desasignarme(self, request, pk=None):
+        """
+        Permite al TÉCNICO quitarse una visita que está asignada a él,
+        siempre que la visita no esté VISITADA o CANCELADA.
+        No toca reagendos existentes (solo suelta la asignación).
+        """
+        obj = self.get_object()
+        u = request.user
+
+        # Solo técnicos
+        if getattr(u, "rol", None) != "tecnico":
+            return Response({"detail": "Solo técnicos pueden desasignarse."}, status=403)
+
+        # Debe estar asignada a este técnico
+        if obj.asignado_a_id != u.id:
+            return Response({"detail": "Solo puedes desasignarte de tus propias visitas."}, status=409)
+
+        # No permitir si ya está finalizada/cancelada
+        if obj.estado in {"VISITADA", "CANCELADA"}:
+            return Response({"detail": "No se puede desasignar una visita finalizada/cancelada."}, status=409)
+
+        motivo = (request.data or {}).get("motivo", "").strip()
+
+        with transaction.atomic():
+            obj.asignado_a = None
+            # Si estaba ASIGNADA, vuelve a PENDIENTE (criterio actual)
+            obj.estado = "PENDIENTE"
+            obj.save(update_fields=["asignado_a", "estado", "updated_at"])
+
+            HistorialAsignacion.objects.create(
+                asignacion=obj,
+                accion=HistorialAsignacion.Accion.DESASIGNADA,
+                detalles="Desasignada por el propio técnico." + (f" Motivo: {motivo}" if motivo else ""),
+                usuario=u,
+            )
+
+        # Log sensible
+        try:
+            LogSistema.objects.create(
+                usuario=u,
+                accion=getattr(LogSistema.Accion, "ASSIGN_UNASSIGN_SELF", "ASSIGN_UNASSIGN_SELF"),
+                detalle=f"Técnico {u.email} se desasignó la visita #{obj.id}. Motivo: {motivo or '-'}",
+            )
+        except Exception:
+            pass
+
+        return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
 
     # ---------- HISTORIAL ----------
     @action(detail=False, methods=["get"], url_path="historial")
@@ -457,7 +615,9 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             rut_cliente   = _s(_canon_get(row, header_map, "rut_cliente"))
             id_vivienda   = _s(_canon_get(row, header_map, "id_vivienda"))
             direccion     = _s(_canon_get(row, header_map, "direccion"))
-            comuna        = _s(_canon_get(row, header_map, "comuna"))
+            comuna_raw    = _s(_canon_get(row, header_map, "comuna"))
+            comuna        = _norm_comuna(comuna_raw)
+            zona          = _norm_zona(_canon_get(row, header_map, "zona"))
 
             marca      = (_s(_canon_get(row, header_map, "marca")) or "CLARO").upper()
             tecnologia = (_s(_canon_get(row, header_map, "tecnologia")) or "HFC").upper()
@@ -487,7 +647,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             defaults = {
                 "rut_cliente": rut_cliente,
                 "direccion": direccion,
-                "comuna": comuna,
+                "comuna": comuna,           # ← normalizada
                 "marca": marca or "CLARO",
                 "tecnologia": tecnologia or "HFC",
                 "encuesta": encuesta or "post_visita",
@@ -495,6 +655,8 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             }
             if fecha_val:
                 defaults["fecha"] = fecha_val
+            if zona:
+                defaults["zona"] = zona
 
             if id_vivienda:
                 obj, was_created = DireccionAsignada.objects.get_or_create(
@@ -511,6 +673,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             for k, v in defaults.items():
                 setattr(obj, k, v)
 
+            # No importar "bloque" como reagendo (criterio actual)
             if bloque:
                 obj.reagendado_bloque = None
 
@@ -528,7 +691,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             if was_created:
                 HistorialAsignacion.objects.create(
                     asignacion=obj,
-                    accion="CREADA",
+                    accion=HistorialAsignacion.Accion.CREADA,
                     detalles=f"Creada por carga XLS/CSV. {'Asignada a ' + asignado.email if asignado else 'Sin técnico'}",
                     usuario=request.user,
                 )
@@ -536,13 +699,26 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             else:
                 HistorialAsignacion.objects.create(
                     asignacion=obj,
-                    accion="EDITADA",
+                    accion=HistorialAsignacion.Accion.EDITADA,  # ← ahora existe
                     detalles="Actualizada por carga XLS/CSV.",
                     usuario=request.user,
                 )
                 updated = True
 
             results.append({"rownum": idx, "created": created, "updated": updated})
+
+        # Log resumen de carga
+        try:
+            LogSistema.objects.create(
+                usuario=request.user if getattr(request.user, "is_authenticated", False) else None,
+                accion=getattr(LogSistema.Accion, "ASSIGN_BULK_LOAD", "ASSIGN_BULK_LOAD"),
+                detalle=f"Carga {('XLSX' if name.endswith('.xlsx') else 'CSV')} '{_s(getattr(f, 'name', 'desconocido'))}': "
+                        f"creados={sum(1 for r in results if r['created'])}, "
+                        f"actualizados={sum(1 for r in results if r['updated'])}, "
+                        f"errores={sum(1 for r in results if r.get('errors'))}",
+            )
+        except Exception:
+            pass
 
         return Response({
             "ok": True,
@@ -565,11 +741,20 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         obj.save()
         HistorialAsignacion.objects.create(
             asignacion=obj,
-            accion="ASIGNACION_ELIMINADA",
+            accion=HistorialAsignacion.Accion.DESASIGNADA,  # ← existe en tu modelo
             detalles="Desasignada por administrador.",
             usuario=request.user,
         )
-        return Response(self.get_serializer(obj).data)
+        # Log sensible
+        try:
+            LogSistema.objects.create(
+                usuario=request.user,
+                accion=getattr(LogSistema.Accion, "ASSIGN_UNASSIGN_ADMIN", "ASSIGN_UNASSIGN_ADMIN"),
+                detalle=f"Admin {request.user.email} desasignó la visita #{obj.id}",
+            )
+        except Exception:
+            pass
+        return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
 
     # ---------- ESTADO DEL CLIENTE (Q5) ----------
     @extend_schema(request=EstadoClienteActionSerializer, responses=DireccionAsignadaSerializer)
@@ -579,46 +764,59 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
         if request.method == "GET":
             return Response({
-                "ayuda": "Completa y haz POST. Si eliges 'Reagendó', usa /reagendar para indicar fecha/bloque.",
+                "ayuda": "POST con {'estado_cliente': ..., opcionalmente 'reagendado_fecha','reagendado_bloque','motivo'}. "
+                         "Si eliges 'Reagendó', debes indicar fecha/bloque.",
             })
 
-        data = request.data or {}
-        canonical = _parse_estado_cliente_from_request(data)
-        if canonical is None:
-            return Response({"detail": "estado_cliente inválido."}, status=400)
+        ser = EstadoClienteActionSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        estado = ser.validated_data["estado_cliente"]
+        motivo = (ser.validated_data.get("motivo") or "").strip()
 
         with transaction.atomic():
-            if canonical == "autoriza":
+            if estado == "autoriza":
                 obj.estado = "VISITADA"
                 obj.save(update_fields=["estado", "updated_at"])
                 HistorialAsignacion.objects.create(
                     asignacion=obj,
-                    accion="ESTADO_CLIENTE",
+                    accion=HistorialAsignacion.Accion.ESTADO_CLIENTE,
                     detalles="Estado cliente = autoriza (asignación VISITADA).",
                     usuario=request.user,
                 )
-            elif canonical in {"sin_moradores", "rechaza", "contingencia", "masivo"}:
+                # Log
+                try:
+                    LogSistema.objects.create(
+                        usuario=request.user,
+                        accion=getattr(LogSistema.Accion, "ASSIGN_MARK_VISITED", "ASSIGN_MARK_VISITED"),
+                        detalle=f"Marcó VISITADA la asignación #{obj.id}",
+                    )
+                except Exception:
+                    pass
+
+            elif estado in {"sin_moradores", "rechaza", "contingencia", "masivo"}:
                 obj.estado = "CANCELADA"
                 obj.save(update_fields=["estado", "updated_at"])
                 HistorialAsignacion.objects.create(
                     asignacion=obj,
-                    accion="ESTADO_CLIENTE",
-                    detalles=f"Estado cliente = {canonical} (asignación CANCELADA).",
+                    accion=HistorialAsignacion.Accion.ESTADO_CLIENTE,
+                    detalles=f"Estado cliente = {estado} (asignación CANCELADA).",
                     usuario=request.user,
                 )
+                # Log
+                try:
+                    LogSistema.objects.create(
+                        usuario=request.user,
+                        accion=getattr(LogSistema.Accion, "ASSIGN_MARK_CANCELLED", "ASSIGN_MARK_CANCELLED"),
+                        detalle=f"Marcó CANCELADA la asignación #{obj.id} (motivo cliente={estado})",
+                    )
+                except Exception:
+                    pass
+
             else:  # reagendo
-                f = data.get("reagendado_fecha")
-                b = data.get("reagendado_bloque")
-                if not f or not b:
-                    return Response({
-                        "detail": "Para reagendar usa POST /api/asignaciones/{id}/reagendar/ con (fecha, bloque)."
-                    }, status=400)
-                if str(f) < str(timezone.localdate()):
-                    return Response({"detail": "La fecha reagendada no puede ser pasada."}, status=400)
-                b_norm = _normalize_bloque(b)
-                if b_norm not in {"10-13", "14-18"}:
-                    return Response({"detail": "Bloque inválido (use 10-13 o 14-18)."}, status=400)
-                _registrar_reagendamiento(obj, f, b_norm, request.user, motivo="Q5(estado_cliente=reagendo)")
+                f = ser.validated_data["reagendado_fecha"]     # date validado
+                b = ser.validated_data["reagendado_bloque"]    # "10-13"/"14-18"
+                motivo_final = motivo or "Q5(estado_cliente=reagendo)"
+                _registrar_reagendamiento(obj, f, b, request.user, motivo=motivo_final)
 
         serializer = DireccionAsignadaSerializer(obj, context={"request": request})
         return Response(serializer.data)
@@ -630,18 +828,20 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         obj = self.get_object()
 
         if request.method == "GET":
-            return Response({"ayuda": "POST {fecha:'YYYY-MM-DD', bloque:'10-13|14-18'} para reagendar."})
+            return Response({"ayuda": "POST {fecha:'YYYY-MM-DD', bloque:'10-13|14-18', motivo?} para reagendar."})
 
         ser = ReagendarActionSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         fecha = ser.validated_data["fecha"]
         bloque = ser.validated_data["bloque"]
+        # motivo opcional (aunque el serializer no lo defina, lo tomamos del request)
+        motivo = _s((request.data or {}).get("motivo"))
 
         if obj.estado in {"VISITADA", "CANCELADA"}:
             return Response({"detail": "No se puede reagendar una visita finalizada/cancelada."}, status=409)
 
         with transaction.atomic():
-            _registrar_reagendamiento(obj, fecha, bloque, request.user, motivo="REAGENDAR")
+            _registrar_reagendamiento(obj, fecha, bloque, request.user, motivo=motivo or "REAGENDAR")
 
         return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
 
@@ -661,7 +861,10 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
         total = qs.count()
         c = lambda s: qs.filter(estado=s).count()
-        pend, asig, vis, canc, reag = (c("PENDIENTE"), c("ASIGNADA"), c("VISITADA"), c("CANCELADA"), c("REAGENDADA"))
+        pend, asig, vis, canc = (c("PENDIENTE"), c("ASIGNADA"), c("VISITADA"), c("CANCELADA"))
+        # Opción A: reagendadas por existencia de reagendado_fecha
+        reag = qs.filter(reagendado_fecha__isnull=False).count()
+
         pct = lambda n: round(100.0 * n / total, 1) if total else 0.0
         return Response({
             "total": total,
@@ -695,7 +898,10 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
         total = qs.count()
         c = lambda s: qs.filter(estado=s).count()
-        pend, asig, vis, canc, reag = (c("PENDIENTE"), c("ASIGNADA"), c("VISITADA"), c("CANCELADA"), c("REAGENDADA"))
+        pend, asig, vis, canc = (c("PENDIENTE"), c("ASIGNADA"), c("VISITADA"), c("CANCELADA"))
+        # Opción A: reagendadas por existencia de reagendado_fecha
+        reag = qs.filter(reagendado_fecha__isnull=False).count()
+
         pct = lambda n: round(100.0 * n / total, 1) if total else 0.0
         return Response({
             "total": total,
@@ -763,8 +969,16 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                         .values("d").annotate(c=Count("id")).order_by("d"))
             return {a["d"].isoformat(): a["c"] for a in agg}
 
+        # visitadas por fecha de visita (fecha)
         v = serie_por_estado("VISITADA")
-        r = serie_por_estado("REAGENDADA")
+
+        # Opción A: reagendadas por fecha de reagendo (reagendado_fecha)
+        base_r = qs.filter(reagendado_fecha__isnull=False)
+        agg_r = (base_r.annotate(d=TruncDate("reagendado_fecha"))
+                        .values("d").annotate(c=Count("id")).order_by("d"))
+        r = {a["d"].isoformat(): a["c"] for a in agg_r}
+
+        # canceladas por fecha de cita (fecha)
         c = serie_por_estado("CANCELADA")
 
         fechas = sorted(set(v.keys()) | set(r.keys()) | set(c.keys()))

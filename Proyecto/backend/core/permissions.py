@@ -134,6 +134,14 @@ class AdminOrSuperuserFull_TechCrudOwn(BasePermission):
         if owner_id is None and hasattr(obj, "asignacion"):
             owner_id = getattr(getattr(obj, "asignacion", None), "asignado_a_id", None)
         return owner_id == getattr(user, "id", None)
+    
+
+class AdminOnly(BasePermission):
+    """Solo permite acceso a usuarios con rol=administrador."""
+    def has_permission(self, request, view):
+        u = getattr(request, "user", None)
+        return bool(u and getattr(u, "is_authenticated", False) and getattr(u, "rol", None) == "administrador")
+
 
 
 # === Alias retrocompatibles (si algo del proyecto viejo los importaba) ===

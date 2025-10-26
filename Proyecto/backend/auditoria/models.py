@@ -204,6 +204,8 @@ class AuditoriaVisita(models.Model):
 
     class Meta:
         ordering = ["-created_at", "-id"]
+        verbose_name = "Auditoría de visita"
+        verbose_name_plural = "Auditorías de visitas"
 
     def __str__(self):
         a = getattr(self, "asignacion", None)

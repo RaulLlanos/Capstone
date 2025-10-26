@@ -32,12 +32,8 @@ def _build_subject_body(notif):
         lines.append(f"Fecha reagendada: {p.get('reagendado_fecha', '')}")
     if "reagendado_bloque" in p:
         lines.append(f"Bloque: {p.get('reagendado_bloque', '')}")
-
-    # Datos del técnico (si vienen)
-    if "tecnico_id" in p:
-        lines.append(f"Técnico ID: {p.get('tecnico_id', '')}")
-    if "tecnico_email" in p:
-        lines.append(f"Técnico email: {p.get('tecnico_email', '')}")
+    if "motivo" in p and p.get("motivo"):
+        lines.append(f"Motivo: {p.get('motivo')}")
 
     body = "\n".join(lines)
     return subject, body
