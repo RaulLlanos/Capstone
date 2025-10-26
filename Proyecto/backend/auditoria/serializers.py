@@ -67,14 +67,12 @@ class AuditoriaVisitaSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        """
-        - Si la crea un técnico, se asocia automáticamente a `tecnico`.
-        - Los efectos colaterales (reagendo / historial) los maneja signals.py
-        """
         request = self.context.get("request")
         u = getattr(request, "user", None)
         if u and getattr(u, "rol", None) == "tecnico":
-            validated_data["tecnico"] = u
+            asignacion = validated_data["asignacion"]
+            if asignacion.asignado_a_id != u.id:
+                raise serializers.ValidationError("Solo puedes auditar tus asignaciones.")
         return super().create(validated_data)
 
     def update(self, instance, validated_data):

@@ -1,25 +1,33 @@
-# claro_project/settings.py
-import os
 from pathlib import Path
-from datetime import timedelta
+import os
+from urllib.parse import urlparse, parse_qs
 
-from dotenv import load_dotenv
-import dj_database_url
-
-# === Paths ===
+# ——— Paths ———
 BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / ".env")
 
-# === Básico ===
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-insecure-key")  # cambia en prod
-DEBUG = bool(int(os.environ.get("DEBUG", "1")))  # 1 en dev, 0 en prod
-ALLOWED_HOSTS = [h.strip() for h in os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")]
+# ——— Helpers env ———
+def env(key: str, default: str = "") -> str:
+    return os.getenv(key, default)
 
-# Marca de entorno (para activar seguridad fuerte en PROD)
-DJANGO_ENV = os.environ.get("DJANGO_ENV", "development").lower()
-IS_PROD = (DJANGO_ENV in {"prod", "production"}) or (DEBUG is False)
+def env_bool(key: str, default: bool = False) -> bool:
+    v = os.getenv(key)
+    if v is None:
+        return default
+    return str(v).strip().lower() in {"1", "true", "yes", "on"}
 
-# === Apps ===
+def env_list(key: str, default: str = "") -> list[str]:
+    raw = os.getenv(key, default)
+    if not raw:
+        return []
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+# ——— Seguridad / Debug ———
+SECRET_KEY = env("DJANGO_SECRET_KEY", "dev-unsafe-change-me")
+DEBUG = env_bool("DEBUG", False)
+
+ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost")
+
+# ——— Apps ———
 INSTALLED_APPS = [
     # Django
     "django.contrib.admin",
@@ -31,11 +39,12 @@ INSTALLED_APPS = [
 
     # Terceros
     "rest_framework",
-    "django_filters",
-    "corsheaders",
+    "rest_framework.authtoken",
     "drf_spectacular",
+    "corsheaders",
+    "django_filters",
 
-    # Apps del proyecto
+    # Locales
     "core",
     "usuarios",
     "asignaciones",
@@ -44,44 +53,26 @@ INSTALLED_APPS = [
 
 AUTH_USER_MODEL = "usuarios.Usuario"
 
-# === Middleware ===
+# ——— Middleware ———
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",  # CORS siempre arriba
     "django.middleware.security.SecurityMiddleware",
-
-    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
-
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
-
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # Autorización por prefijo/rol (tu middleware)
+    "core.middleware.RoleAuthorizationMiddleware",
 ]
 
-# === CORS/CSRF (ajusta según tu front) ===
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
-CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS[:]
-CORS_ALLOW_CREDENTIALS = True
-
-# Cookies de CSRF (dev)
-CSRF_COOKIE_SAMESITE = "Lax"
-CSRF_COOKIE_SECURE = False  # en PROD lo forzamos True más abajo
-
-# === URLS / WSGI ===
 ROOT_URLCONF = "claro_project.urls"
-WSGI_APPLICATION = "claro_project.wsgi.application"
 
-# === Templates ===
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -94,57 +85,68 @@ TEMPLATES = [
     },
 ]
 
-# === Base de datos (Supabase / dj_database_url) ===
-DATABASES = {
-    "default": dj_database_url.config(
-        env="DATABASE_URL",
-        conn_max_age=600,
-        ssl_require=True,   # necesario en Supabase
-    )
-}
+WSGI_APPLICATION = "claro_project.wsgi.application"
 
-# === Password validators ===
+# ——— Base de datos ———
+def db_from_url(url: str):
+    if not url:
+        return {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    parsed = urlparse(url)
+    engine = {
+        "postgres": "django.db.backends.postgresql",
+        "postgresql": "django.db.backends.postgresql",
+        "pgsql": "django.db.backends.postgresql",
+    }.get(parsed.scheme, "django.db.backends.postgresql")
+
+    # sslmode (require, verify-full, etc)
+    q = parse_qs(parsed.query or "")
+    sslmode = (q.get("sslmode", [""])[0] or "").strip()
+
+    return {
+        "ENGINE": engine,
+        "NAME": (parsed.path or "/")[1:] or "",
+        "USER": parsed.username or "",
+        "PASSWORD": parsed.password or "",
+        "HOST": parsed.hostname or "",
+        "PORT": str(parsed.port or ""),
+        "CONN_MAX_AGE": 60,
+        "OPTIONS": ({"sslmode": sslmode} if sslmode else {}),
+    }
+
+DATABASES = {"default": db_from_url(env("DATABASE_URL"))}
+
+# ——— Passwords ———
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 8}},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-# === i18n ===
-LANGUAGE_CODE = "es"
+# ——— i18n ———
+LANGUAGE_CODE = "es-cl"
 TIME_ZONE = "America/Santiago"
 USE_I18N = True
 USE_TZ = True
 
-# === Static & Media ===
-STATIC_URL = "static/"
+# ——— Static/Media ———
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_DIRS = [BASE_DIR / "static"] if (BASE_DIR / "static").exists() else []
+
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# === JWT (SimpleJWT) — configuración simple sin rotación/blacklist ===
-SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
-    "AUTH_HEADER_TYPES": ("Bearer",),
-}
-
-# === Cookies para JWT HttpOnly ===
-JWT_AUTH_COOKIE = "access"
-JWT_AUTH_REFRESH_COOKIE = "refresh"
-JWT_COOKIE_SAMESITE = "Lax"    # en prod: "None" si hay front en otro dominio y HTTPS
-JWT_COOKIE_SECURE = False      # en prod: True
-JWT_COOKIE_PATH = "/"
-JWT_COOKIE_DOMAIN = None
-
-# === DRF ===
+# ——— DRF / JWT / Filters ———
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "usuarios.auth_cookie.CookieJWTAuthentication",                        # cookie JWT
-        "rest_framework_simplejwt.authentication.JWTAuthentication",           # Authorization: Bearer
-        "rest_framework.authentication.SessionAuthentication",                 # admin y Browsable API
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
@@ -154,80 +156,76 @@ REST_FRAMEWORK = {
         "rest_framework.filters.SearchFilter",
         "rest_framework.filters.OrderingFilter",
     ),
-    "DEFAULT_PARSER_CLASSES": (
-        "rest_framework.parsers.JSONParser",
-        "rest_framework.parsers.MultiPartParser",
-        "rest_framework.parsers.FormParser",
-    ),
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "50/min",
+        "user": "200/min",
+    },
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
-    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 
-# === drf-spectacular (OpenAPI) ===
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "json": {
+            "format": "%(levelname)s %(asctime)s %(name)s %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "json",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
+    },
+}
+
 SPECTACULAR_SETTINGS = {
-    "TITLE": "API ClaroVTR",
-    "DESCRIPTION": "API para asignaciones, auditorías, historial y métricas",
+    "TITLE": "Claro API",
+    "DESCRIPTION": "API de auditorías/asignaciones",
     "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
 }
 
-# === Hash de contraseñas (bcrypt primero) ===
-PASSWORD_HASHERS = [
-    "django.contrib.auth.hashers.BCryptSHA256PasswordHasher",
-    "django.contrib.auth.hashers.BCryptPasswordHasher",
-    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
-]
+# ——— CORS / CSRF ———
+CORS_ALLOWED_ORIGINS = env_list("DJANGO_CORS_ALLOWED_ORIGINS")
+CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS")
+CORS_ALLOW_CREDENTIALS = True
 
-# === Backends de autenticación (email o “local-part”) ===
-AUTHENTICATION_BACKENDS = [
-    "usuarios.backends.EmailOrLocalBackend",
-    "django.contrib.auth.backends.ModelBackend",
-]
+# ——— Email ———
+EMAIL_BACKEND = (
+    "django.core.mail.backends.console.EmailBackend"
+    if env_bool("EMAIL_CONSOLE", False)
+    else "django.core.mail.backends.smtp.EmailBackend"
+)
+EMAIL_HOST = env("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(env("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = env("EMAIL_HOST_USER")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD")
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
+EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", False)
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "no-reply@example.com")
 
-# === Límites de subida ===
-DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
-FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
+# ——— Seguridad extra (prod detrás de proxy/SSL) ———
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-LOGIN_REDIRECT_URL = "/api/"
-LOGOUT_REDIRECT_URL = "/api-auth/login/"
-LOGIN_URL = "/api-auth/login/"
+# ——— Reglas de rutas/roles para tu middleware ———
+ROLE_ROUTE_RULES = {
+    "/api/admin/": {"administrador"},
+    "/api/asignaciones/": {"administrador", "tecnico"},
+    "/api/auditorias/": {"administrador", "tecnico"},
+    # agrega más prefijos si necesitas…
+}
 
-# === Endurecer en PRODUCCIÓN, sin “ensuciar” dev ===
-if IS_PROD:
-    SECURE_SSL_REDIRECT = True
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
-    JWT_COOKIE_SECURE = True
-    SECURE_HSTS_SECONDS = 31536000
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-    SECURE_HSTS_PRELOAD = True
-    SECURE_CONTENT_TYPE_NOSNIFF = True
-    X_FRAME_OPTIONS = "DENY"
-else:
-    SESSION_COOKIE_SECURE = False
-    CSRF_COOKIE_SECURE = False
-    JWT_COOKIE_SECURE = False
-
-# =========================================================
-# === Email / Notificaciones (SMTP) — configuración única
-# =========================================================
-# Usa variables de entorno en .env; si falta algo, hay defaults seguros.
-# Email (SMTP)
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
-EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
-EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
-EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
-EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "1") == "1"
-EMAIL_USE_SSL = os.environ.get("EMAIL_USE_SSL", "0") == "1"
-DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "no-reply@localhost")
-
-# Correos que reciben copia de todas las notificaciones
-NOTIFY_ADMIN_EMAILS = [
-    e.strip() for e in os.environ.get("NOTIFY_ADMIN_EMAILS", "").split(",") if e.strip()
-]
-
-# Forzar impresión a consola en dev (opcional)
-if not IS_PROD and os.environ.get("EMAIL_CONSOLE", "0") == "1":
-    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-
+# ——— Swagger endpoints (opcional en urls.py) ———
+#   path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+#   path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema")),

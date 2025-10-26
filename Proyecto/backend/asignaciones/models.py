@@ -1,3 +1,5 @@
+# asignaciones/models.py
+
 from django.db import models
 from django.db.models import Q
 from usuarios.models import Usuario
@@ -27,10 +29,7 @@ class BloqueHorario(models.TextChoices):
     DIEZ_TRECE        = "10-13", "10:00 a 13:00"
     CATORCE_DIECIOCHO = "14-18", "14:00 a 18:00"
 
-class ZonaSantiago(models.TextChoices):
-    NORTE  = "NORTE",  "Norte"
-    CENTRO = "CENTRO", "Centro"
-    SUR    = "SUR",    "Sur"
+# ⚠️ Eliminamos ZonaSantiago con choices para que la zona sea “escalable”.
 
 class DireccionAsignada(models.Model):
     fecha       = models.DateField("Fecha programada", null=True, blank=True)
@@ -40,7 +39,8 @@ class DireccionAsignada(models.Model):
     id_vivienda = models.CharField("ID vivienda", max_length=50, blank=True)
     direccion   = models.CharField("Dirección del cliente", max_length=255)
     comuna      = models.CharField("Comuna", max_length=80, blank=True)
-    zona        = models.CharField("Zona", max_length=10, choices=ZonaSantiago.choices, blank=True)
+    # ← zona ahora es libre y con más espacio
+    zona        = models.CharField("Zona", max_length=40, blank=True)
 
     encuesta     = models.CharField("Encuesta de origen", max_length=20, choices=TipoEncuesta.choices)
     id_qualtrics = models.CharField("ID Qualtrics", max_length=64, blank=True)
@@ -67,8 +67,8 @@ class DireccionAsignada(models.Model):
 
     class Meta:
         db_table = "asignaciones"
-        verbose_name = "Dirección"
-        verbose_name_plural = "Direcciones"
+        verbose_name = "Dirección asignada"
+        verbose_name_plural = "Direcciones asignadas"
         indexes = [
             models.Index(fields=["rut_cliente", "id_vivienda"]),
             models.Index(fields=["marca", "tecnologia"]),
@@ -120,6 +120,9 @@ class HistorialAsignacion(models.Model):
         REAGENDADA        = "REAGENDADA",       "Reagendada"
         CERRADA           = "CERRADA",          "Cerrada"
         AUDITORIA_CREADA  = "AUDITORIA_CREADA", "Auditoría creada"
+        # Agregadas para compatibilidad con tu flujo:
+        EDITADA           = "EDITADA",          "Editada"
+        DESASIGNADA       = "DESASIGNADA",      "Desasignada"
 
     asignacion = models.ForeignKey(
         DireccionAsignada, on_delete=models.CASCADE, related_name="historial", verbose_name="Dirección"
@@ -131,8 +134,8 @@ class HistorialAsignacion(models.Model):
 
     class Meta:
         db_table = "historial_asignaciones"
-        verbose_name = "Historial de dirección"
-        verbose_name_plural = "Historial de direcciones"
+        verbose_name = "Historial de asignación"
+        verbose_name_plural = "Historial de asignaciones"
         ordering = ["-created_at"]
 
     def __str__(self):

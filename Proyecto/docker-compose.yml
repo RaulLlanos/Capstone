@@ -1,0 +1,74 @@
+# docker-compose.yml (sin 'version:')
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: proyecto-db
+    environment:
+      POSTGRES_DB: claro_db_postgres
+      POSTGRES_USER: user_claro
+      POSTGRES_PASSWORD: password_claro
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user_claro -d claro_db_postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    container_name: proyecto-backend
+    command: gunicorn claro_project.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
+    environment:
+      DATABASE_URL: postgresql://user_claro:password_claro@db:5432/claro_db_postgres
+      DJANGO_SECRET_KEY: dev-unsafe-change-me
+      DEBUG: "1"
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+      DJANGO_CORS_ALLOWED_ORIGINS: http://localhost:5173
+      EMAIL_CONSOLE: "1"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: proyecto-frontend
+    environment:
+      VITE_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+  backup:
+    image: postgres:15-alpine
+    container_name: proyecto-backup
+    depends_on:
+      - db
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: claro_db_postgres
+      POSTGRES_USER: user_claro
+      POSTGRES_PASSWORD: password_claro
+      BACKUP_PATH: /backups
+      BACKUP_KEEP: 7
+      BACKUP_INTERVAL_SEC: 86400
+    volumes:
+      - ./backups:/backups
+      - ./backup:/scripts:ro     # ← montamos la carpeta completa
+    entrypoint: ["sh","-c","exec sh /scripts/backup.sh"]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

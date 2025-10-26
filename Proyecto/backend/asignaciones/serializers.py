@@ -119,7 +119,11 @@ class EstadoClienteActionSerializer(serializers.Serializer):
         ("masivo", "Incidencia Masivo ClaroVTR"),
         ("reagendo", "Reagendó"),
     ]
-    estado_cliente = serializers.ChoiceField(choices=ESTADOS_Q5, write_only=True, help_text="Seleccione el resultado de la visita (Q5).")
+
+    estado_cliente = serializers.ChoiceField(
+        choices=ESTADOS_Q5, write_only=True,
+        help_text="Seleccione el resultado de la visita (Q5)."
+    )
     reagendado_fecha = serializers.DateField(
         required=False, write_only=True,
         input_formats=["%Y-%m-%d"],
@@ -130,6 +134,19 @@ class EstadoClienteActionSerializer(serializers.Serializer):
         choices=[("10-13", "10:00 a 13:00"), ("14-18", "14:00 a 18:00")],
         help_text="Requerido si 'Reagendó'."
     )
+    motivo = serializers.CharField(required=False, allow_blank=True, max_length=200)
+
+    def validate(self, attrs):
+        estado = attrs.get("estado_cliente")
+        if estado == "reagendo":
+            f = attrs.get("reagendado_fecha")
+            b = attrs.get("reagendado_bloque")
+            if not f or not b:
+                raise serializers.ValidationError("Debe indicar fecha y bloque de reagendamiento.")
+            # fecha no pasada
+            if f < timezone.localdate():
+                raise serializers.ValidationError("La fecha reagendada no puede ser pasada.")
+        return attrs
 
 
 class ReagendarActionSerializer(serializers.Serializer):
@@ -144,6 +161,7 @@ class ReagendarActionSerializer(serializers.Serializer):
         choices=[("10-13", "10:00 a 13:00"), ("14-18", "14:00 a 18:00")],
         help_text="Selecciona el bloque.",
     )
+    motivo = serializers.CharField(required=False, allow_blank=True, max_length=200)
 
     def validate_fecha(self, val):
         if str(val) < str(timezone.localdate()):
