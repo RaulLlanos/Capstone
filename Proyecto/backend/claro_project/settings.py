@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 from urllib.parse import urlparse, parse_qs
+from datetime import timedelta
 
 # ——— Paths ———
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -145,10 +146,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ——— DRF / JWT / Filters ———
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-    "usuarios.auth_cookie.CookieJWTAuthentication",   # cookies HttpOnly primero
-    "rest_framework_simplejwt.authentication.JWTAuthentication",  # fallback: Bearer
-    "rest_framework.authentication.SessionAuthentication",        # admin Django
-   ),
+        "core.auth.CookieOrHeaderJWTAuthentication",                  # cookies HttpOnly primero
+        "rest_framework_simplejwt.authentication.JWTAuthentication",  # fallback: Bearer
+        "rest_framework.authentication.SessionAuthentication",        # admin Django
+    ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
@@ -169,6 +170,24 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
 }
+
+# —— JWT (lifetimes para SimpleJWT y nombres/flags de cookies) ——
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(env("JWT_ACCESS_MINUTES", "30"))),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=int(env("JWT_REFRESH_DAYS", "7"))),
+    "ALGORITHM": "HS256",
+    "AUTH_HEADER_TYPES": ("Bearer",),
+}
+
+# Variables que usan tus vistas y la auth por cookies
+JWT_LOGIN_RETURN_TOKENS = env_bool("JWT_LOGIN_RETURN_TOKENS", False)
+JWT_AUTH_COOKIE = env("JWT_AUTH_COOKIE", "access")
+JWT_AUTH_REFRESH_COOKIE = env("JWT_AUTH_REFRESH_COOKIE", "refresh")
+JWT_COOKIE_SAMESITE = env("JWT_COOKIE_SAMESITE", "Lax")
+JWT_COOKIE_SECURE = env_bool("JWT_COOKIE_SECURE", False)
+# Usa None si viene vacío, para que Django no meta un dominio inválido:
+JWT_COOKIE_DOMAIN = (env("JWT_COOKIE_DOMAIN") or None)
+JWT_COOKIE_PATH = env("JWT_COOKIE_PATH", "/")
 
 LOGGING = {
     "version": 1,
@@ -198,8 +217,14 @@ SPECTACULAR_SETTINGS = {
 }
 
 # ——— CORS / CSRF ———
-CORS_ALLOWED_ORIGINS = env_list("DJANGO_CORS_ALLOWED_ORIGINS")
-CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS")
+CORS_ALLOWED_ORIGINS = env_list("DJANGO_CORS_ALLOWED_ORIGINS") or [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS") or [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
 CORS_ALLOW_CREDENTIALS = True
 
 # ——— Email ———
@@ -229,4 +254,4 @@ ROLE_ROUTE_RULES = {
 
 # ——— Swagger endpoints (opcional en urls.py) ———
 #   path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
-#   path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema")),
+#   path("api/docs/",   SpectacularSwaggerView.as_view(url_name="schema")),
