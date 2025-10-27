@@ -1,0 +1,25 @@
+# docker-compose.supabase.yml
+services:
+  backend:
+    # Quitamos la dependencia del Postgres local
+    depends_on: []
+    environment:
+      # Usa el valor del .env (abajo)
+      DATABASE_URL: ${DATABASE_URL}
+
+  # Opcional: deja el servicio db "fuera" para no usarlo.
+  db:
+    profiles: ["localdb-disabled"]
+
+  # El backup ahora apunta a Supabase (no al contenedor local)
+  backup:
+    environment:
+      POSTGRES_HOST: ${SUPABASE_HOST}
+      POSTGRES_DB: ${SUPABASE_DB}
+      POSTGRES_USER: ${SUPABASE_USER}
+      POSTGRES_PASSWORD: ${SUPABASE_PASSWORD}
+      BACKUP_PATH: /backups
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+      BACKUP_INTERVAL_SEC: ${BACKUP_INTERVAL_SEC:-86400}
+      # Fuerza SSL en pg_dump/psql
+      PGSSLMODE: require

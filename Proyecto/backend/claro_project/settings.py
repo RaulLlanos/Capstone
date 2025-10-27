@@ -2,6 +2,9 @@ from pathlib import Path
 import os
 from urllib.parse import urlparse, parse_qs
 from datetime import timedelta
+from dotenv import load_dotenv
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 
 # ——— Paths ———
 BASE_DIR = Path(__file__).resolve().parent.parent
