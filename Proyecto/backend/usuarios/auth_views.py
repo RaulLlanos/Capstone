@@ -88,7 +88,8 @@ class RegisterView(APIView):
 class LoginView(APIView):
     """
     POST /api/token/
-    - Devuelve tokens en cookies (access/refresh) y también en el body (access/refresh).
+    - Setea cookies HttpOnly (access/refresh).
+    - (Opcional) Si settings.JWT_LOGIN_RETURN_TOKENS=True, también devuelve access/refresh en el body.
     - Registra LOGIN_SUCCESS / LOGIN_FAIL en LogSistema.
     """
     permission_classes = [AllowAny]
@@ -102,20 +103,21 @@ class LoginView(APIView):
 
         if not login or not password:
             _log("LOGIN_FAIL", f"Faltan credenciales para login={login} ip={ip} ua={ua}", usuario=None)
-            return Response({"detail": "Faltan credenciales."}, status=401)
+            return Response({"detail": "Faltan credenciales."}, status=status.HTTP_401_UNAUTHORIZED)
 
         # Permites login con 'usuario' sin dominio → intenta resolver a email completo
         if "@" not in login:
             qs = Usuario.objects.filter(email__istartswith=f"{login}@")
             if qs.count() != 1:
                 _log("LOGIN_FAIL", f"Ambiguo/inexistente login={login} ip={ip} ua={ua}", usuario=None)
-                return Response({"detail": "Usuario ambiguo o inexistente. Usa el email completo."}, status=401)
+                return Response({"detail": "Usuario ambiguo o inexistente. Usa el email completo."},
+                                status=status.HTTP_401_UNAUTHORIZED)
             login = qs.first().email
 
         user = authenticate(request, username=login, password=password)
         if not user or not user.is_active:
             _log("LOGIN_FAIL", f"Credenciales inválidas para {login} ip={ip} ua={ua}", usuario=None)
-            return Response({"detail": "Credenciales inválidas."}, status=401)
+            return Response({"detail": "Credenciales inválidas."}, status=status.HTTP_401_UNAUTHORIZED)
 
         # Genera tokens (SimpleJWT)
         refresh = RefreshToken.for_user(user)
@@ -124,20 +126,20 @@ class LoginView(APIView):
         access_s = int(settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds())
         refresh_s = int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds())
 
-        resp = Response(
-            {
-                # Incluimos también los tokens en el body para CLI/QA
-                "access": str(access),
-                "refresh": str(refresh),
-                "user": {
-                    "id": user.id,
-                    "email": user.email,
-                    "first_name": user.first_name,
-                    "last_name": user.last_name,
-                    "rol": getattr(user, "rol", None),
-                },
-            }
-        )
+        user_payload = {
+            "id": user.id,
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "rol": getattr(user, "rol", None),
+        }
+
+        # Body por defecto: solo info de usuario (tokens opcionales)
+        resp = Response({"user": user_payload})
+
+        # Si quieres tokens en body (para Bearer en front/QA), habilita el flag en settings/.env
+        if getattr(settings, "JWT_LOGIN_RETURN_TOKENS", False):
+            resp.data.update({"access": str(access), "refresh": str(refresh)})
 
         # Setea cookies (flujo web)
         _set_cookie(resp, getattr(settings, "JWT_AUTH_COOKIE", "access"), str(access), access_s)
@@ -150,7 +152,7 @@ class LoginView(APIView):
 class RefreshCookieView(APIView):
     """
     POST /auth/refresh
-    - Lee refresh desde cookie, devuelve set-cookie con access renovado.
+    - Lee refresh desde cookie y renueva access (cookie + opcional body).
     - Registra TOKEN_REFRESH / TOKEN_REFRESH_FAIL.
     """
     permission_classes = [AllowAny]
@@ -163,7 +165,7 @@ class RefreshCookieView(APIView):
 
         if not raw_refresh:
             _log("TOKEN_REFRESH_FAIL", f"Sin refresh cookie ip={ip} ua={ua}", usuario=None)
-            return Response({"detail": "Falta refresh cookie."}, status=401)
+            return Response({"detail": "Falta refresh cookie."}, status=status.HTTP_401_UNAUTHORIZED)
 
         try:
             refresh = RefreshToken(raw_refresh)
@@ -177,9 +179,12 @@ class RefreshCookieView(APIView):
 
         except TokenError:
             _log("TOKEN_REFRESH_FAIL", f"Refresh inválido/expirado ip={ip} ua={ua}", usuario=None)
-            return Response({"detail": "Refresh inválido/expirado."}, status=401)
+            return Response({"detail": "Refresh inválido/expirado."}, status=status.HTTP_401_UNAUTHORIZED)
 
         access_s = int(settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds())
+
+        # Por coherencia: siempre devolvemos un pequeño mensaje + access (útil para QA);
+        # si no quieres el access en body, puedes ocultarlo con otro flag.
         resp = Response({"detail": "Access renovado.", "access": str(access)})
 
         _set_cookie(resp, getattr(settings, "JWT_AUTH_COOKIE", "access"), str(access), access_s)
@@ -200,7 +205,7 @@ class LogoutView(APIView):
         ip, ua = _client_info(request)
         user = request.user
 
-        resp = Response(status=204)
+        resp = Response(status=status.HTTP_204_NO_CONTENT)
         _delete_cookie(resp, getattr(settings, "JWT_AUTH_COOKIE", "access"))
         _delete_cookie(resp, getattr(settings, "JWT_AUTH_REFRESH_COOKIE", "refresh"))
 
