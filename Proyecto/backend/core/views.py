@@ -1,6 +1,27 @@
 # core/views.py
 from django.http import HttpResponse
 from django.utils.html import escape
+from rest_framework import viewsets, permissions
+from core.models import Notificacion, LogSistema
+from core.serializers import NotificacionSerializer, LogSistemaSerializer
+
+
+class NotificacionViewSet(viewsets.ModelViewSet):
+    """
+    CRUD de notificaciones.
+    Permiso básico: autenticado (puedes cambiar a IsAdminUser si quieres).
+    """
+    queryset = Notificacion.objects.all().order_by("-id")
+    serializer_class = NotificacionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+class LogSistemaViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Solo lectura de logs del sistema (útil para auditar errores 4xx/5xx).
+    """
+    queryset = LogSistema.objects.all().order_by("-id")
+    serializer_class = LogSistemaSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
 ESTADOS_LABEL = {
     "autoriza": "Autoriza a ingresar",

@@ -252,7 +252,7 @@ ROLE_ROUTE_RULES = {
     "/api/admin/": {"administrador"},
     "/api/asignaciones/": {"administrador", "tecnico"},
     "/api/auditorias/": {"administrador", "tecnico"},
-    # agrega más prefijos si necesitas…
+    "/api/core/": {"administrador", "tecnico"},
 }
 
 # ——— Swagger endpoints (opcional en urls.py) ———
