@@ -1,6 +1,6 @@
 # core/serializers.py
 from rest_framework import serializers
-from .models import Configuracion, LogSistema
+from .models import Configuracion, LogSistema, Notificacion
 
 class ConfiguracionSerializer(serializers.ModelSerializer):
     class Meta:
@@ -12,6 +12,10 @@ class ConfiguracionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("La clave es obligatoria.")
         return v.strip()
 
+class NotificacionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notificacion
+        fields = "__all__"
 
 class LogSistemaSerializer(serializers.ModelSerializer):
     usuario_email = serializers.SerializerMethodField()
