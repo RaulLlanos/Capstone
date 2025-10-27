@@ -145,9 +145,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ——— DRF / JWT / Filters ———
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-        "rest_framework.authentication.SessionAuthentication",
-    ),
+    "usuarios.auth_cookie.CookieJWTAuthentication",   # cookies HttpOnly primero
+    "rest_framework_simplejwt.authentication.JWTAuthentication",  # fallback: Bearer
+    "rest_framework.authentication.SessionAuthentication",        # admin Django
+   ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
