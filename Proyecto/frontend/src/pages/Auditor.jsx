@@ -3,8 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
 import styles from "./Login.module.css";
-
-// Recharts
 import {
   ResponsiveContainer,
   LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -13,7 +11,6 @@ import {
   Legend,
 } from "recharts";
 
-// Paleta simple (rojos/azules/grises). Recharts auto-asigna si faltan.
 const COLORS = ["#EF4444", "#F59E0B", "#10B981", "#3B82F6", "#6366F1", "#6B7280", "#A855F7", "#14B8A6"];
 
 function normalizeList(data) {
@@ -22,7 +19,6 @@ function normalizeList(data) {
   return [];
 }
 
-// Fecha efectiva para mostrar/comparar (reagendada si existe)
 function getEffectiveDate(it) {
   const r =
     it.reagendado_fecha ||
@@ -33,84 +29,141 @@ function getEffectiveDate(it) {
 }
 
 function isCompletada(it) {
-  return String(it.estado || "").toUpperCase() === "visitada" || String(it.estado || "").toUpperCase() === "VISITADA";
+  return String(it.estado || "").toUpperCase() === "VISITADA";
 }
 
 function ymdToDmy(s) {
   if (!s) return "—";
-  const ymd = String(s).slice(0, 10);
-  const [y, m, d] = ymd.split("-");
-  if (!y || !m || !d) return "—";
+  const [y, m, d] = String(s).slice(0, 10).split("-");
   return `${d.padStart(2, "0")}/${m.padStart(2, "0")}/${y}`;
 }
 
-// Para agrupar por clave
 const inc = (map, key, by = 1) => {
   map.set(key, (map.get(key) || 0) + by);
   return map;
 };
 
-// Rango de días YYYY-MM-DD (hoy - (n-1) … hoy)
 function lastNDaysYMD(n) {
   const days = [];
   const now = new Date();
   for (let i = n - 1; i >= 0; i--) {
     const d = new Date(now);
     d.setDate(now.getDate() - i);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    days.push(`${y}-${m}-${day}`);
+    days.push(d.toISOString().slice(0, 10));
   }
   return days;
+}
+
+// Helpers de nombres
+function buildUserLabel(u) {
+  if (!u) return "Técnico";
+  return (
+    u.first_name?.trim() || u.last_name?.trim()
+      ? `${u.first_name ?? ""} ${u.last_name ?? ""}`.trim()
+      : (u.email || `Tec#${u.id}`)
+  );
 }
 
 export default function Auditor() {
   const [items, setItems] = useState([]);
   const [count, setCount] = useState(0);
-  const [next, setNext] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const fetching = useRef(false);
 
-  // Carga con paginación (DRF)
-  const loadAll = async () => {
-    if (fetching.current) return;
-    fetching.current = true;
-    setLoading(true);
-    setError("");
-    try {
-      let url = "/api/asignaciones/";
-      let acc = [];
-      let total = 0;
-      for (;;) {
-        const res = await api.get(url);
-        const data = res.data || {};
-        const chunk = normalizeList(data);
-        acc = acc.concat(chunk);
-        total = data.count ?? acc.length;
-        if (!data.next) break;
-        url = data.next; // next absoluto
-      }
-      setItems(acc);
-      setCount(total);
-      setNext(null);
-    } catch (e) {
-      console.error(e);
-      setError("No se pudieron cargar las asignaciones.");
-      setItems([]);
-      setCount(0);
-    } finally {
-      setLoading(false);
-      fetching.current = false;
-    }
-  };
+  // Técnicos
+  const [techMap, setTechMap] = useState(new Map()); // id:number -> usuario
+  const [techOptions, setTechOptions] = useState([]); // [{id, label}]
+  const [selectedTechId, setSelectedTechId] = useState("ALL");
 
+  // Cargar todas las asignaciones
   useEffect(() => {
-    loadAll();
+    (async () => {
+      setLoading(true);
+      setError("");
+      try {
+        let url = "/api/asignaciones/";
+        let acc = [];
+        for (;;) {
+          const res = await api.get(url);
+          const data = res.data || {};
+          acc = acc.concat(normalizeList(data));
+          if (!data.next) break;
+          url = data.next;
+        }
+        setItems(acc);
+        setCount(acc.length);
+      } catch (e) {
+        console.error(e);
+        setError("No se pudieron cargar las asignaciones.");
+        setItems([]);
+        setCount(0);
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
-  // ---- Métricas derivadas ----
+  // Cargar técnicos (usuarios con rol=tecnico)
+  useEffect(() => {
+    (async () => {
+      try {
+        let url = "/api/usuarios/?rol=tecnico";
+        const all = [];
+        for (;;) {
+          const res = await api.get(url);
+          const data = res.data || {};
+          const list = normalizeList(data);
+          all.push(...list);
+          if (!data.next) break;
+          url = data.next;
+        }
+        const map = new Map();
+        for (const u of all) map.set(u.id, u);
+        setTechMap(map);
+
+        const opts = all
+          .map((u) => ({ id: u.id, label: buildUserLabel(u) }))
+          .sort((a, b) => a.label.localeCompare(b.label));
+        setTechOptions(opts);
+      } catch (e) {
+        console.warn("No se pudieron cargar técnicos:", e);
+        setTechMap(new Map());
+        setTechOptions([]);
+      }
+    })();
+  }, []);
+
+  // Dado un item, obtener el id del técnico (asignado)
+  function getTecnicoIdFromItem(it) {
+    // El schema de asignaciones expone "asignado_a" (int, readOnly).
+    // Si existiera it.tecnico como obj/num, también lo consideramos.
+    if (typeof it.asignado_a === "number") return it.asignado_a;
+    if (typeof it.tecnico === "number") return it.tecnico;
+    if (it.tecnico && typeof it.tecnico === "object" && typeof it.tecnico.id === "number") return it.tecnico.id;
+    return null;
+  }
+
+  // Dado un item, obtener el label del técnico
+  function getTecnicoLabelFromItem(it) {
+    const id = getTecnicoIdFromItem(it);
+    if (id && techMap.has(id)) return buildUserLabel(techMap.get(id));
+    // fallback: si vino un objeto técnico embedido
+    if (it.tecnico && typeof it.tecnico === "object") {
+      return it.tecnico.nombre || it.tecnico.full_name || it.tecnico.email || `Tec#${it.tecnico.id ?? "?"}`;
+    }
+    if (typeof it.tecnico === "string") return it.tecnico;
+    if (typeof it.asignado_a === "number") return `Tec#${it.asignado_a}`;
+    return "Sin técnico";
+  }
+
+  // Items filtrados por técnico seleccionado
+  const itemsFiltrados = useMemo(() => {
+    if (selectedTechId === "ALL") return items;
+    const sel = Number(selectedTechId);
+    return items.filter((it) => getTecnicoIdFromItem(it) === sel);
+  }, [items, selectedTechId]);
+
+  // --- Cálculos del dashboard (sobre itemsFiltrados) ---
   const {
     porEstado,
     porMarca,
@@ -128,107 +181,59 @@ export default function Auditor() {
     const byZona = new Map();
     const byComuna = new Map();
     const byTecnico30 = new Map();
+    let reagendadas = 0, asignadas = 0, sinAsignar = 0;
 
-    let reagendadas = 0;
-    let asignadas = 0;
-    let sinAsignar = 0;
-
-    // Ventanas de tiempo
     const days14 = lastNDaysYMD(14);
-    const days30 = lastNDaysYMD(30);
     const set14 = new Set(days14);
-    const set30 = new Set(days30);
-
-    // Inicializa series de completadas 14 días
     const comp14 = new Map();
     days14.forEach((d) => comp14.set(d, 0));
 
-    for (const it of items) {
+    for (const it of itemsFiltrados) {
       const estado = String(it.estado || "").toUpperCase();
-      const marca = String(it.marca || "—");
-      const tec = String(it.tecnologia || "—");
-      const zona = String(it.zona || "—");
-      const comuna = String(it.comuna || "—");
-
       inc(byEstado, estado);
-      inc(byMarca, marca);
-      inc(byTec, tec);
-      inc(byZona, zona);
-      inc(byComuna, comuna);
+      inc(byMarca, String(it.marca || "—"));
+      inc(byTec, String(it.tecnologia || "—"));
+      inc(byZona, String(it.zona || "—"));
+      inc(byComuna, String(it.comuna || "—"));
 
-      // asignación (FK tecnico / asignado_a)
-      const hasTecnico = it.tecnico != null && it.tecnico !== "";
-      if (hasTecnico || it.asignado_a != null) asignadas++;
-      else sinAsignar++;
+      const hasAssignee = getTecnicoIdFromItem(it) !== null;
+      if (hasAssignee) asignadas++; else sinAsignar++;
 
-      // reagendamiento presente (cualquier variante)
-      const hasReag =
-        it.reagendado_fecha ||
-        it.reagendado_bloque ||
-        (it.reagendado && (it.reagendado.fecha || it.reagendado.bloque || it.reagendado.reagendado_fecha || it.reagendado.reagendado_bloque)) ||
-        it.reagendadoFecha ||
-        it.reagendadoBloque;
+      const hasReag = it.reagendado_fecha || it.reagendado_bloque;
       if (hasReag) reagendadas++;
 
-      // completadas por día (14 días) usando fecha efectiva (o actualizada si tienes un completed_at)
       if (isCompletada(it)) {
         const eff = getEffectiveDate(it).slice(0, 10);
-        if (set14.has(eff)) {
-          comp14.set(eff, (comp14.get(eff) || 0) + 1);
-        }
-        // productividad por técnico (30 días)
-        const eff30 = getEffectiveDate(it).slice(0, 10);
-        if (set30.has(eff30)) {
-          // label técnico
-          let label = "Sin técnico";
-          const t = it.tecnico;
-          if (t && typeof t === "object") {
-            label = t.nombre || t.full_name || t.display_name || t.email || `Tec#${t.id ?? "?"}`;
-          } else if (typeof t === "string") {
-            label = t;
-          } else if (typeof t === "number") {
-            label = `Tec#${t}`;
-          }
-          inc(byTecnico30, label);
-        }
+        if (set14.has(eff)) comp14.set(eff, (comp14.get(eff) || 0) + 1);
+
+        const label = getTecnicoLabelFromItem(it);
+        inc(byTecnico30, label);
       }
     }
 
-    const total = items.length || 1; // evita /0
+    const total = itemsFiltrados.length || 1;
     const tasaReag = Math.round((reagendadas / total) * 100);
 
-    const porEstadoArr = Array.from(byEstado.entries()).map(([name, value]) => ({ name, value }));
-    const porMarcaArr = Array.from(byMarca.entries()).map(([name, value]) => ({ name, value }));
-    const porTecArr = Array.from(byTec.entries()).map(([name, value]) => ({ name, value }));
-    const porZonaArr = Array.from(byZona.entries()).map(([name, value]) => ({ name, value }));
-
-    const completadas14Arr = days14.map((d) => ({ day: ymdToDmy(d), value: comp14.get(d) || 0 }));
-
-    const topComunasArr = Array.from(byComuna.entries())
-      .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 10);
-
-    const prodTec30Arr = Array.from(byTecnico30.entries())
-      .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 12);
-
     return {
-      porEstado: porEstadoArr,
-      porMarca: porMarcaArr,
-      porTecnologia: porTecArr,
-      porZona: porZonaArr,
+      porEstado: Array.from(byEstado, ([name, value]) => ({ name, value })),
+      porMarca: Array.from(byMarca, ([name, value]) => ({ name, value })),
+      porTecnologia: Array.from(byTec, ([name, value]) => ({ name, value })),
+      porZona: Array.from(byZona, ([name, value]) => ({ name, value })),
       tasaReagendamiento: tasaReag,
       asignadasVsSinAsignar: [
         { name: "Asignadas", value: asignadas },
         { name: "Sin asignar", value: sinAsignar },
       ],
-      completadasPorDia14: completadas14Arr,
-      topComunas: topComunasArr,
-      productividadTecnicos30: prodTec30Arr,
+      completadasPorDia14: lastNDaysYMD(14).map((d) => ({ day: ymdToDmy(d), value: comp14.get(d) || 0 })),
+      topComunas: Array.from(byComuna, ([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 10),
+      productividadTecnicos30: Array.from(byTecnico30, ([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 12),
     };
-  }, [items]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemsFiltrados, techMap]);
 
   return (
     <div className={styles.wrapper}>
@@ -236,160 +241,68 @@ export default function Auditor() {
         <header className={styles.header}>
           <h1 className={styles.title}>Panel Administrador</h1>
           <p className={styles.subtitle}>
-            Resumen de asignaciones ({count} registros). Datos desde <code>/api/asignaciones/</code>.
+            Resumen de asignaciones ({itemsFiltrados.length} de {count} totales)
           </p>
         </header>
+
+        {/* Filtro por técnico */}
+        <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+          <label className={styles.helper} style={{ fontWeight: 600 }}>Filtrar por técnico:</label>
+          <select
+            className={styles.select}
+            value={selectedTechId}
+            onChange={(e) => setSelectedTechId(e.target.value)}
+          >
+            <option value="ALL">Todos los técnicos</option>
+            {techOptions.map((t) => (
+              <option key={t.id} value={t.id}>{t.label}</option>
+            ))}
+          </select>
+        </div>
 
         {error && <div className={styles.error}>{error}</div>}
         {loading && <div className={styles.helper}>Cargando…</div>}
 
         {!loading && !error && (
           <>
-            {/* KPIs rápidos */}
+            {/* KPIs */}
             <section style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-              <KpiCard label="Total asignaciones" value={count} />
+              <KpiCard label="Total asignaciones" value={itemsFiltrados.length} />
               <KpiCard label="Reagendadas (%)" value={`${tasaReagendamiento}%`} />
-              <KpiCard
-                label="Asignadas"
-                value={(asignadasVsSinAsignar.find(x => x.name === "Asignadas")?.value || 0)}
-              />
-              <KpiCard
-                label="Sin asignar"
-                value={(asignadasVsSinAsignar.find(x => x.name === "Sin asignar")?.value || 0)}
-              />
+              <KpiCard label="Asignadas" value={asignadasVsSinAsignar[0]?.value || 0} />
+              <KpiCard label="Sin asignar" value={asignadasVsSinAsignar[1]?.value || 0} />
             </section>
 
-            {/* Fila 1: Estado (pie) + Completadas 14 días (línea) */}
+            {/* Estado + Completadas */}
             <section style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12, marginTop: 12 }}>
-              <div className={styles.card} style={{ padding: 12 }}>
-                <h3 className={styles.title} style={{ fontSize: 16, marginBottom: 8 }}>Distribución por estado</h3>
-                <div style={{ height: 260 }}>
-                  <ResponsiveContainer>
-                    <PieChart>
-                      <Pie data={porEstado} dataKey="value" nameKey="name" outerRadius={90}>
-                        {porEstado.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                      </Pie>
-                      <Legend />
-                      <Tooltip />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className={styles.card} style={{ padding: 12 }}>
-                <h3 className={styles.title} style={{ fontSize: 16, marginBottom: 8 }}>
-                  Completadas por día (últimos 14)
-                </h3>
-                <div style={{ height: 260 }}>
-                  <ResponsiveContainer>
-                    <LineChart data={completadasPorDia14}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="day" />
-                      <YAxis allowDecimals={false} />
-                      <Tooltip />
-                      <Line type="monotone" dataKey="value" stroke="#EF4444" />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
+              <ChartPie title="Distribución por estado" data={porEstado} />
+              <ChartLine title="Completadas por día (últimos 14)" data={completadasPorDia14} />
             </section>
 
-            {/* Fila 2: Marca y Tecnología (barras) */}
+            {/* Marca + Tecnología */}
             <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
-              <div className={styles.card} style={{ padding: 12 }}>
-                <h3 className={styles.title} style={{ fontSize: 16, marginBottom: 8 }}>Por marca</h3>
-                <div style={{ height: 240 }}>
-                  <ResponsiveContainer>
-                    <BarChart data={porMarca}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="name" />
-                      <YAxis allowDecimals={false} />
-                      <Tooltip />
-                      <Bar dataKey="value" fill="#EF4444" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className={styles.card} style={{ padding: 12 }}>
-                <h3 className={styles.title} style={{ fontSize: 16, marginBottom: 8 }}>Por tecnología</h3>
-                <div style={{ height: 240 }}>
-                  <ResponsiveContainer>
-                    <BarChart data={porTecnologia}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="name" />
-                      <YAxis allowDecimals={false} />
-                      <Tooltip />
-                      <Bar dataKey="value" fill="#3B82F6" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
+              <ChartBar title="Por marca" data={porMarca} color="#EF4444" />
+              <ChartBar title="Por tecnología" data={porTecnologia} color="#3B82F6" />
             </section>
 
-            {/* Fila 3: Asignadas vs sin asignar (pie) + Zonas (barras) */}
+            {/* Asignación + Zona */}
             <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
-              <div className={styles.card} style={{ padding: 12 }}>
-                <h3 className={styles.title} style={{ fontSize: 16, marginBottom: 8 }}>Asignación</h3>
-                <div style={{ height: 240 }}>
-                  <ResponsiveContainer>
-                    <PieChart>
-                      <Pie data={asignadasVsSinAsignar} dataKey="value" nameKey="name" outerRadius={90}>
-                        {asignadasVsSinAsignar.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                      </Pie>
-                      <Legend />
-                      <Tooltip />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className={styles.card} style={{ padding: 12 }}>
-                <h3 className={styles.title} style={{ fontSize: 16, marginBottom: 8 }}>Por zona</h3>
-                <div style={{ height: 240 }}>
-                  <ResponsiveContainer>
-                    <BarChart data={porZona}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="name" />
-                      <YAxis allowDecimals={false} />
-                      <Tooltip />
-                      <Bar dataKey="value" fill="#6B7280" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
+              <ChartPie title="Asignación" data={asignadasVsSinAsignar} />
+              <ChartBar title="Por zona" data={porZona} color="#6B7280" />
             </section>
 
-            {/* Fila 4: Productividad por técnico (30 días) + Top comunas */}
+            {/* Productividad + Top comunas */}
             <section style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12, marginTop: 12 }}>
-              <div className={styles.card} style={{ padding: 12 }}>
-                <h3 className={styles.title} style={{ fontSize: 16, marginBottom: 8 }}>
-                  Productividad por técnico (últimos 30 días)
-                </h3>
-                <div style={{ height: 280 }}>
-                  <ResponsiveContainer>
-                    <BarChart data={productividadTecnicos30}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="name" interval={0} angle={-20} textAnchor="end" height={70} />
-                      <YAxis allowDecimals={false} />
-                      <Tooltip />
-                      <Bar dataKey="value" fill="#10B981" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
+              <ChartBar title="Productividad por técnico (últimos 30 días)" data={productividadTecnicos30} color="#10B981" />
               <div className={styles.card} style={{ padding: 12 }}>
                 <h3 className={styles.title} style={{ fontSize: 16, marginBottom: 8 }}>Top 10 comunas</h3>
-                <div style={{ display: "grid", gap: 6 }}>
-                  {topComunas.map((c, i) => (
-                    <div key={c.name} style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-                      <span>{i + 1}. {c.name}</span>
-                      <strong>{c.value}</strong>
-                    </div>
-                  ))}
-                  {topComunas.length === 0 && <div className={styles.helper}>Sin datos.</div>}
-                </div>
+                {topComunas.map((c, i) => (
+                  <div key={c.name} style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+                    <span>{i + 1}. {c.name}</span>
+                    <strong>{c.value}</strong>
+                  </div>
+                ))}
+                {topComunas.length === 0 && <div className={styles.helper}>Sin datos.</div>}
               </div>
             </section>
           </>
@@ -399,12 +312,68 @@ export default function Auditor() {
   );
 }
 
-// Componente simple para KPIs
 function KpiCard({ label, value }) {
   return (
     <div className={styles.card} style={{ padding: 16 }}>
       <div className={styles.helper} style={{ fontSize: 12 }}>{label}</div>
       <div className={styles.title} style={{ marginTop: 4, fontSize: 22 }}>{value}</div>
+    </div>
+  );
+}
+
+function ChartPie({ title, data }) {
+  return (
+    <div className={styles.card} style={{ padding: 12 }}>
+      <h3 className={styles.title} style={{ fontSize: 16, marginBottom: 8 }}>{title}</h3>
+      <div style={{ height: 260 }}>
+        <ResponsiveContainer>
+          <PieChart>
+            <Pie data={data} dataKey="value" nameKey="name" outerRadius={90}>
+              {data.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+            </Pie>
+            <Legend />
+            <Tooltip />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function ChartLine({ title, data }) {
+  return (
+    <div className={styles.card} style={{ padding: 12 }}>
+      <h3 className={styles.title} style={{ fontSize: 16, marginBottom: 8 }}>{title}</h3>
+      <div style={{ height: 260 }}>
+        <ResponsiveContainer>
+          <LineChart data={data}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="day" />
+            <YAxis allowDecimals={false} />
+            <Tooltip />
+            <Line type="monotone" dataKey="value" stroke="#EF4444" />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function ChartBar({ title, data, color }) {
+  return (
+    <div className={styles.card} style={{ padding: 12 }}>
+      <h3 className={styles.title} style={{ fontSize: 16, marginBottom: 8 }}>{title}</h3>
+      <div style={{ height: 240 }}>
+        <ResponsiveContainer>
+          <BarChart data={data}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="name" />
+            <YAxis allowDecimals={false} />
+            <Tooltip />
+            <Bar dataKey="value" fill={color} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }
