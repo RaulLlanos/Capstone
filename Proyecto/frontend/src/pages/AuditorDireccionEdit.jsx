@@ -1,6 +1,6 @@
 /* eslint-disable no-unused-vars */
 // src/pages/AuditorDireccionEdit.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../services/api";
 import { useAuth } from "../context/AuthContext";
@@ -10,28 +10,17 @@ const MARCAS = ["CLARO", "VTR"];
 const TECNOLOGIAS = ["HFC", "NFTT", "FTTH"];
 const ZONAS = ["NORTE", "CENTRO", "SUR"];
 const ENCUESTAS = [
-  { value: "post_visita", label: "Post visita"   },
-  { value: "instalacion", label: "Instalación"   },
-  { value: "operaciones", label: "Operaciones"   },
+  { value: "post_visita", label: "Post visita" },
+  { value: "instalacion", label: "Instalación" },
+  { value: "operaciones", label: "Operaciones" },
 ];
-const ESTADOS = ["PENDIENTE", "ASIGNADA", "COMPLETADA", "CANCELADA"]; // backend uppercase
+const ESTADOS = ["PENDIENTE", "ASIGNADA", "COMPLETADA", "CANCELADA"];
 
-// Comunas de Santiago agrupadas por zona
+// Comunas de Santiago agrupadas por zona (ajusta si necesitas)
 const COMUNAS_POR_ZONA = {
-  NORTE: [
-    "Huechuraba", "Recoleta", "Independencia", "Conchalí",
-    "Quilicura", "Renca", "Vitacura", "Las Condes", "Lo Barnechea"
-  ],
-  CENTRO: [
-    "Santiago", "Providencia", "Ñuñoa", "Macul", "La Reina",
-    "Estación Central", "Quinta Normal", "Pedro Aguirre Cerda",
-    "San Miguel", "Cerrillos", "Maipú", "Pudahuel", "Lo Prado"
-  ],
-  SUR: [
-    "San Joaquín", "La Cisterna", "San Ramón", "La Granja",
-    "El Bosque", "La Pintana", "Lo Espejo", "San Bernardo",
-    "Puente Alto", "Pirque"
-  ],
+  NORTE: ["Huechuraba","Recoleta","Independencia","Conchalí","Quilicura","Renca","Vitacura","Las Condes","Lo Barnechea"],
+  CENTRO: ["Santiago","Providencia","Ñuñoa","Macul","La Reina","Estación Central","Quinta Normal","Pedro Aguirre Cerda","San Miguel","Cerrillos","Maipú","Pudahuel","Lo Prado"],
+  SUR: ["San Joaquín","La Cisterna","San Ramón","La Granja","El Bosque","La Pintana","Lo Espejo","San Bernardo","Puente Alto","Pirque"],
 };
 
 // Endpoints candidatos para listar usuarios técnicos
@@ -43,6 +32,13 @@ const TECH_ENDPOINTS = [
   "/auth/users/",
   "/api/users/",
 ];
+
+function pickResults(data) {
+  if (!data) return [];
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data.results)) return data.results;
+  return [];
+}
 
 export default function AuditorDireccionEdit() {
   const { id } = useParams();
@@ -65,8 +61,7 @@ export default function AuditorDireccionEdit() {
     encuesta: "",
     id_qualtrics: "",
     estado: "PENDIENTE",
-    // ⚠️ este es el que usa el backend para asignar (FK):
-    tecnico: "", // value = id del usuario técnico; "" = sin asignar
+    tecnicoSelect: "", // <- valor del select (id del técnico o "")
   });
 
   const [loading, setLoading] = useState(true);
@@ -79,15 +74,17 @@ export default function AuditorDireccionEdit() {
   const [techs, setTechs] = useState([{ value: "", label: "Sin asignar" }]);
   const [loadingTechs, setLoadingTechs] = useState(true);
 
-  // Comunas disponibles según la zona elegida
+  // Clave que el backend usa para la asignación (detectada dinámicamente)
+  // valores posibles: "tecnico" | "asignado_a" | null (aún sin detectar)
+  const [assignKey, setAssignKey] = useState(null);
+
   const comunasOptions = useMemo(
     () => (COMUNAS_POR_ZONA[form.zona] ?? []),
     [form.zona]
   );
 
-  // Normaliza un array de usuarios cualquiera a [{value:<id>, label:<nombre/email>, role}]
   const normalizeUsers = (raw) => {
-    const arr = Array.isArray(raw?.results) ? raw.results : Array.isArray(raw) ? raw : [];
+    const arr = pickResults(raw);
     return arr
       .map((u) => {
         const id = u.id ?? u.pk ?? null;
@@ -106,7 +103,7 @@ export default function AuditorDireccionEdit() {
       .filter(Boolean);
   };
 
-  // Cargar detalle
+  // Cargar detalle de la asignación
   useEffect(() => {
     (async () => {
       try {
@@ -114,16 +111,22 @@ export default function AuditorDireccionEdit() {
         const res = await api.get(`/api/asignaciones/${id}/`);
         const d = res.data || {};
 
-        // d.tecnico puede venir como id, null o incluso objeto; soportamos los tres
+        // Detectar qué clave usa el backend en el detalle
+        // Preferimos una que exista explícitamente
+        let detected = null;
+        if (Object.prototype.hasOwnProperty.call(d, "tecnico")) detected = "tecnico";
+        if (Object.prototype.hasOwnProperty.call(d, "asignado_a")) detected = detected || "asignado_a";
+        setAssignKey(detected);
+
+        // Obtener el valor actual del técnico (independiente de la clave)
         let tecnicoValue = "";
-        if (d.tecnico === null || d.tecnico === undefined || d.tecnico === "") {
+        const rawTec = d.tecnico ?? d.asignado_a;
+        if (rawTec === null || rawTec === undefined || rawTec === "") {
           tecnicoValue = "";
-        } else if (typeof d.tecnico === "object") {
-          // Intenta id dentro del objeto
-          tecnicoValue = d.tecnico.id ? String(d.tecnico.id) : "";
+        } else if (typeof rawTec === "object") {
+          tecnicoValue = rawTec.id ? String(rawTec.id) : "";
         } else {
-          // número o string
-          tecnicoValue = String(d.tecnico);
+          tecnicoValue = String(rawTec);
         }
 
         setForm({
@@ -138,7 +141,7 @@ export default function AuditorDireccionEdit() {
           encuesta: d.encuesta || "",
           id_qualtrics: d.id_qualtrics || "",
           estado: (d.estado || "PENDIENTE").toUpperCase(),
-          tecnico: tecnicoValue, // id o ""
+          tecnicoSelect: tecnicoValue,
         });
       } catch (err) {
         console.error("GET detalle falló:", err?.response?.status, err?.response?.data);
@@ -149,7 +152,7 @@ export default function AuditorDireccionEdit() {
     })();
   }, [id]);
 
-  // Cargar técnicos (intenta endpoints con ?role=tecnico; si no, filtra en frontend)
+  // Cargar técnicos
   useEffect(() => {
     (async () => {
       setLoadingTechs(true);
@@ -159,11 +162,8 @@ export default function AuditorDireccionEdit() {
           const res = await api.get(ep);
           loaded = normalizeUsers(res.data);
           if (loaded.length) break;
-        } catch (_) {
-          // probar siguiente
-        }
+        } catch (_) { /* probar siguiente */ }
       }
-      // Si el endpoint no filtró, nos quedamos solo con role=tecnico
       const onlyTechs = loaded.filter((t) => t.role === "tecnico");
       const finalList = onlyTechs.length ? onlyTechs : loaded;
       setTechs([{ value: "", label: "Sin asignar" }, ...finalList.map(({ value, label }) => ({ value, label }))]);
@@ -174,7 +174,6 @@ export default function AuditorDireccionEdit() {
   const onChange = (e) => {
     const { name, value } = e.target;
     setForm((f) => {
-      // Si cambia la zona, limpiar comuna si no pertenece a la nueva zona
       if (name === "zona") {
         const nuevas = COMUNAS_POR_ZONA[value] ?? [];
         const comunaValida = nuevas.includes(f.comuna) ? f.comuna : "";
@@ -202,8 +201,8 @@ export default function AuditorDireccionEdit() {
     return fe;
   };
 
-  // Construye SIEMPRE el objeto completo: el backend lo prefiere
-  const buildFullPayload = () => ({
+  // Construye payload base (sin el campo de asignación)
+  const buildBasePayload = () => ({
     fecha: form.fecha,
     tecnologia: form.tecnologia,
     marca: form.marca,
@@ -215,10 +214,26 @@ export default function AuditorDireccionEdit() {
     encuesta: form.encuesta,
     id_qualtrics: form.id_qualtrics.trim() || "",
     estado: String(form.estado || "PENDIENTE").toUpperCase(),
-    // 👇 clave: enviar FK 'tecnico' como ID o null (aunque el backend hoy no lo aplique)
-    tecnico: form.tecnico ? Number(form.tecnico) : null,
-    // NO enviar 'asignado_a' (es de solo lectura)
   });
+
+  // Devuelve el payload completo usando la clave detectada (o la alternativa)
+  const withAssignField = (base, key) => {
+    const val = form.tecnicoSelect ? Number(form.tecnicoSelect) : null;
+    return { ...base, [key]: val };
+  };
+
+  const trySave = async (payload) => {
+    try {
+      await api.put(`/api/asignaciones/${id}/`, payload);
+      return true;
+    } catch (err) {
+      if (err?.response?.status === 405) {
+        await api.patch(`/api/asignaciones/${id}/`, payload);
+        return true;
+      }
+      throw err;
+    }
+  };
 
   const handleSave = async (e) => {
     e.preventDefault();
@@ -236,20 +251,35 @@ export default function AuditorDireccionEdit() {
       setSaving(true);
       await api.get("/auth/csrf");
 
-      const payload = buildFullPayload();
+      const base = buildBasePayload();
 
+      // Estrategia:
+      // 1) si detectamos clave (tecnico/asignado_a), intentamos con esa
+      // 2) si falla por "campo no válido", probamos con la alternativa
+      let primaryKey = assignKey || "tecnico";
+      let altKey = primaryKey === "tecnico" ? "asignado_a" : "tecnico";
+
+      // Primer intento
       try {
-        await api.put(`/api/asignaciones/${id}/`, payload);
-      } catch (err) {
-        if (err?.response?.status === 405) {
-          await api.patch(`/api/asignaciones/${id}/`, payload);
+        await trySave(withAssignField(base, primaryKey));
+      } catch (err1) {
+        const data = err1?.response?.data;
+        const msg = (typeof data === "string" && data) || JSON.stringify(data || {});
+        const looksLikeUnknownField =
+          (data && (data[primaryKey] || data.non_field_errors)) ||
+          /unknown field|unexpected field|no field named|not a valid/i.test(msg);
+
+        // Reintento con la alternativa SOLO si parece problema de campo
+        if (looksLikeUnknownField) {
+          await trySave(withAssignField(base, altKey));
+          // si funcionó, recordamos esta clave para futuros edits
+          setAssignKey(altKey);
         } else {
-          throw err;
+          throw err1;
         }
       }
 
       setOk("Dirección actualizada correctamente.");
-      // navigate(-1);
     } catch (err) {
       const data = err?.response?.data || {};
       const fe2 = {};
@@ -294,7 +324,6 @@ export default function AuditorDireccionEdit() {
               {fieldErrors.direccion && <small className={styles.error}>{fieldErrors.direccion}</small>}
             </label>
 
-            {/* Comuna dependiente de Zona */}
             <label className={styles.label}>
               Comuna
               <select
@@ -372,7 +401,6 @@ export default function AuditorDireccionEdit() {
               </label>
             </div>
 
-            {/* Estado y Técnico (asignación real) */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <label className={styles.label} style={{ margin: 0 }}>
                 Estado
@@ -386,8 +414,8 @@ export default function AuditorDireccionEdit() {
                 Técnico asignado
                 <select
                   className={styles.select}
-                  name="tecnico"
-                  value={form.tecnico}
+                  name="tecnicoSelect"
+                  value={form.tecnicoSelect}
                   onChange={onChange}
                   disabled={saving || loadingTechs}
                 >
@@ -399,6 +427,7 @@ export default function AuditorDireccionEdit() {
                 </select>
                 {loadingTechs && <small className={styles.helper}>Cargando técnicos…</small>}
                 {fieldErrors.tecnico && <small className={styles.error}>{fieldErrors.tecnico}</small>}
+                {fieldErrors.asignado_a && <small className={styles.error}>{fieldErrors.asignado_a}</small>}
               </label>
             </div>
 
