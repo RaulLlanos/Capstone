@@ -11,6 +11,7 @@ class Notificacion(models.Model):
         EMAIL = "email", "Email"
         WEBHOOK = "webhook", "Webhook"
         SMS = "sms", "SMS"
+        WHATSAPP = "WHATSAPP", "WhatsApp"
 
     class Estado(models.TextChoices):
         PENDING = "pending", "Pendiente"

@@ -12,6 +12,7 @@ from django.db.models import Case, When, Value, IntegerField, Q, Count
 from django.db.models.functions import TruncDate
 from django.http import HttpResponse
 from django.utils import timezone
+from django.conf import settings
 
 from openpyxl import load_workbook, Workbook
 from rest_framework import viewsets
@@ -38,7 +39,7 @@ from .serializers import (
 
 # Notificaciones y logs
 from core.models import Notificacion, LogSistema
-from core.notify import enviar_notificacion_real
+from core.notify import enviar_notificacion_real, enviar_notificacion_whatsapp
 
 
 # -------- Helpers de normalización / parsing --------
@@ -57,7 +58,7 @@ _HEADER_ALIASES = {
         "comuna_cliente", "comuna", "comuna del cliente", "comuna_del_cliente"
     ],
     "zona": [
-        "zona_cliente", "customer_zone", "zona"  # ← normalizamos a NORTE/SUR/ORIENTE
+        "zona_cliente", "customer_zone", "zona"
     ],
     "marca": ["marca", "brand"],
     "tecnologia": ["tecnologia", "customer_network_type"],
@@ -99,7 +100,6 @@ def _build_header_map(raw_headers: List[str]) -> Dict[str, str]:
 
 def _parse_date(val):
     if not val: return None
-    # Si ya viene datetime (openpyxl), extrae date
     if hasattr(val, "year"):
         try: return val.date() if hasattr(val, "date") else val
         except Exception: pass
@@ -107,7 +107,6 @@ def _parse_date(val):
     for fmt in _DATE_FORMATS:
         try: return datetime.strptime(s, fmt).date()
         except Exception: pass
-    # fallback: toma la parte de fecha antes del espacio
     try:
         only_date = s.split()[0]
         for fmt in ("%Y-%m-%d","%d-%m-%Y","%d/%m/%Y","%Y/%m/%d"):
@@ -192,7 +191,6 @@ def _norm_zona(v: str) -> str | None:
     v = v.replace("ZONA METROPOLITANA", "").replace("ZONA", "").strip()
     if v.startswith("NORTE"):   return "NORTE"
     if v.startswith("SUR"):     return "SUR"
-    # ORIENTE/CENTRO normaliza a ORIENTE (criterio actual)
     if v.startswith("ORIENTE") or v.startswith("CENTRO"):
         return "ORIENTE"
     return None
@@ -211,13 +209,6 @@ _COMUNA_ALIASES = {
     "SBER": "San Bernardo",
     "NUNO": "Ñuñoa",
     "LCON": "Las Condes",
-    "QUIL": "Quilicura",
-    "CNCH": "Conchalí",
-    "SMGL": "San Miguel",
-    "ELBO": "El Bosque",
-    "LPRA": "Lo Prado",
-    "VITA": "Vitacura",
-    "COLI": "Colina",
     "RENC": "Renca",
     "ECEN": "Estación Central",
     "LACI": "La Cisterna",
@@ -316,27 +307,71 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
     except Exception:
         pass
 
-    # Notificación email al técnico (si tiene correo)
-    dest = getattr(asignacion.asignado_a, "email", "") or ""
-    notif = Notificacion.objects.create(
-        tipo="reagendo",
-        asignacion=asignacion,
-        canal=Notificacion.Canal.EMAIL if dest else Notificacion.Canal.NONE,
-        destino=dest,
-        provider="",
-        payload={
+    # -------------------- Notificaciones --------------------
+    # Destinatario:
+    # - Si el actor es TÉCNICO => notificar al actor.
+    # - De lo contrario => notificar al TÉCNICO ASIGNADO (si existe).
+    dest_user = None
+    if getattr(usuario, "rol", "") == "tecnico":
+        dest_user = usuario
+    elif asignacion.asignado_a:
+        dest_user = asignacion.asignado_a
+
+    if dest_user:
+        tecnico_id = dest_user.id
+        tecnico_nombre = (f"{(dest_user.first_name or '').strip()} {(dest_user.last_name or '').strip()}").strip() or (dest_user.email or "")
+        tecnico_email = (dest_user.email or "").strip()
+        tecnico_phone = getattr(dest_user, "telefono", None)  # si no existe el campo, quedará None
+
+        # Payload unificado (mantén claves antiguas + agregadas)
+        payload = {
+            # orden requerido por Claro (primero técnico):
+            "tecnico_id": tecnico_id,
+            "tecnico_nombre": tecnico_nombre,
+
+            # visita
             "asignacion_id": asignacion.id,
             "direccion": asignacion.direccion,
             "comuna": asignacion.comuna,
+            "zona": asignacion.zona,
+
+            # cliente (si existe nombre en tu modelo; si no, será "")
+            "cliente_nombre": getattr(asignacion, "nombre_cliente", "") or "",
+            "id_vivienda": getattr(asignacion, "id_vivienda", "") or "",
+
+            # reagendo
             "reagendado_fecha": str(fecha),
             "reagendado_bloque": bloque,
-            "tecnico_id": getattr(usuario, "id", None),
-            "tecnico_email": dest,
-        },
-        status=Notificacion.Estado.QUEUED,
-    )
-    if dest:
-        enviar_notificacion_real(notif)
+
+            # compatibilidad con correo anterior
+            "tecnico_email": tecnico_email,
+        }
+
+        # 1) EMAIL (igual que antes): si hay correo, se crea y se envía
+        notif_email = Notificacion.objects.create(
+            tipo="reagendo",
+            asignacion=asignacion,
+            canal=Notificacion.Canal.EMAIL if tecnico_email else Notificacion.Canal.NONE,
+            destino=tecnico_email or "",
+            provider="",
+            payload=payload,
+            status=Notificacion.Estado.QUEUED,
+        )
+        if tecnico_email:
+            enviar_notificacion_real(notif_email)
+
+        # 2) WHATSAPP: solo si está habilitado y el técnico tiene teléfono
+        if getattr(settings, "WHATSAPP_ENABLED", False) and tecnico_phone:
+            notif_wsp = Notificacion.objects.create(
+                tipo="reagendo",
+                asignacion=asignacion,
+                canal=Notificacion.Canal.WEBHOOK,  # usamos WEBHOOK para WhatsApp
+                destino=str(tecnico_phone),
+                provider="",
+                payload=payload,
+                status=Notificacion.Estado.QUEUED,
+            )
+            enviar_notificacion_whatsapp(notif_wsp)
 
 
 # ---------------------------------------------------
@@ -418,7 +453,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             detalles=f"Asignada a {u.email}.",
             usuario=u,
         )
-        # Log sensible
         try:
             LogSistema.objects.create(
                 usuario=u,
@@ -428,29 +462,20 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         except Exception:
             pass
 
-        # responder con la dirección completa
         return Response(DireccionAsignadaSerializer(obj, context={"request": request}).data)
 
     # ---------- DESASIGNARME (técnico) ----------
     @action(detail=True, methods=["post"], url_path="desasignarme")
     def desasignarme(self, request, pk=None):
-        """
-        Permite al TÉCNICO quitarse una visita que está asignada a él,
-        siempre que la visita no esté VISITADA o CANCELADA.
-        No toca reagendos existentes (solo suelta la asignación).
-        """
         obj = self.get_object()
         u = request.user
 
-        # Solo técnicos
         if getattr(u, "rol", None) != "tecnico":
             return Response({"detail": "Solo técnicos pueden desasignarse."}, status=403)
 
-        # Debe estar asignada a este técnico
         if obj.asignado_a_id != u.id:
             return Response({"detail": "Solo puedes desasignarte de tus propias visitas."}, status=409)
 
-        # No permitir si ya está finalizada/cancelada
         if obj.estado in {"VISITADA", "CANCELADA"}:
             return Response({"detail": "No se puede desasignar una visita finalizada/cancelada."}, status=409)
 
@@ -458,7 +483,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
         with transaction.atomic():
             obj.asignado_a = None
-            # Si estaba ASIGNADA, vuelve a PENDIENTE (criterio actual)
             obj.estado = "PENDIENTE"
             obj.save(update_fields=["asignado_a", "estado", "updated_at"])
 
@@ -469,7 +493,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                 usuario=u,
             )
 
-        # Log sensible
         try:
             LogSistema.objects.create(
                 usuario=u,
@@ -647,7 +670,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             defaults = {
                 "rut_cliente": rut_cliente,
                 "direccion": direccion,
-                "comuna": comuna,           # ← normalizada
+                "comuna": comuna,
                 "marca": marca or "CLARO",
                 "tecnologia": tecnologia or "HFC",
                 "encuesta": encuesta or "post_visita",
@@ -673,7 +696,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             for k, v in defaults.items():
                 setattr(obj, k, v)
 
-            # No importar "bloque" como reagendo (criterio actual)
             if bloque:
                 obj.reagendado_bloque = None
 
@@ -699,7 +721,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             else:
                 HistorialAsignacion.objects.create(
                     asignacion=obj,
-                    accion=HistorialAsignacion.Accion.EDITADA,  # ← ahora existe
+                    accion=HistorialAsignacion.Accion.EDITADA,
                     detalles="Actualizada por carga XLS/CSV.",
                     usuario=request.user,
                 )
@@ -707,7 +729,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
             results.append({"rownum": idx, "created": created, "updated": updated})
 
-        # Log resumen de carga
         try:
             LogSistema.objects.create(
                 usuario=request.user if getattr(request.user, "is_authenticated", False) else None,
@@ -741,11 +762,10 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         obj.save()
         HistorialAsignacion.objects.create(
             asignacion=obj,
-            accion=HistorialAsignacion.Accion.DESASIGNADA,  # ← existe en tu modelo
+            accion=HistorialAsignacion.Accion.DESASIGNADA,
             detalles="Desasignada por administrador.",
             usuario=request.user,
         )
-        # Log sensible
         try:
             LogSistema.objects.create(
                 usuario=request.user,
@@ -783,7 +803,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                     detalles="Estado cliente = autoriza (asignación VISITADA).",
                     usuario=request.user,
                 )
-                # Log
                 try:
                     LogSistema.objects.create(
                         usuario=request.user,
@@ -802,7 +821,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                     detalles=f"Estado cliente = {estado} (asignación CANCELADA).",
                     usuario=request.user,
                 )
-                # Log
                 try:
                     LogSistema.objects.create(
                         usuario=request.user,
@@ -813,8 +831,8 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                     pass
 
             else:  # reagendo
-                f = ser.validated_data["reagendado_fecha"]     # date validado
-                b = ser.validated_data["reagendado_bloque"]    # "10-13"/"14-18"
+                f = ser.validated_data["reagendado_fecha"]
+                b = ser.validated_data["reagendado_bloque"]
                 motivo_final = motivo or "Q5(estado_cliente=reagendo)"
                 _registrar_reagendamiento(obj, f, b, request.user, motivo=motivo_final)
 
@@ -834,7 +852,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         ser.is_valid(raise_exception=True)
         fecha = ser.validated_data["fecha"]
         bloque = ser.validated_data["bloque"]
-        # motivo opcional (aunque el serializer no lo defina, lo tomamos del request)
         motivo = _s((request.data or {}).get("motivo"))
 
         if obj.estado in {"VISITADA", "CANCELADA"}:
@@ -862,7 +879,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         total = qs.count()
         c = lambda s: qs.filter(estado=s).count()
         pend, asig, vis, canc = (c("PENDIENTE"), c("ASIGNADA"), c("VISITADA"), c("CANCELADA"))
-        # Opción A: reagendadas por existencia de reagendado_fecha
         reag = qs.filter(reagendado_fecha__isnull=False).count()
 
         pct = lambda n: round(100.0 * n / total, 1) if total else 0.0
@@ -899,7 +915,6 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         total = qs.count()
         c = lambda s: qs.filter(estado=s).count()
         pend, asig, vis, canc = (c("PENDIENTE"), c("ASIGNADA"), c("VISITADA"), c("CANCELADA"))
-        # Opción A: reagendadas por existencia de reagendado_fecha
         reag = qs.filter(reagendado_fecha__isnull=False).count()
 
         pct = lambda n: round(100.0 * n / total, 1) if total else 0.0
@@ -969,16 +984,11 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                         .values("d").annotate(c=Count("id")).order_by("d"))
             return {a["d"].isoformat(): a["c"] for a in agg}
 
-        # visitadas por fecha de visita (fecha)
         v = serie_por_estado("VISITADA")
-
-        # Opción A: reagendadas por fecha de reagendo (reagendado_fecha)
         base_r = qs.filter(reagendado_fecha__isnull=False)
         agg_r = (base_r.annotate(d=TruncDate("reagendado_fecha"))
                         .values("d").annotate(c=Count("id")).order_by("d"))
         r = {a["d"].isoformat(): a["c"] for a in agg_r}
-
-        # canceladas por fecha de cita (fecha)
         c = serie_por_estado("CANCELADA")
 
         fechas = sorted(set(v.keys()) | set(r.keys()) | set(c.keys()))
