@@ -1,1 +1,0 @@
--r Proyecto/backend/requirements.txt
