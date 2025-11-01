@@ -1,3 +1,4 @@
+# Proyecto/backend/claro_project/settings.py
 from pathlib import Path
 import os
 from urllib.parse import urlparse, parse_qs
@@ -57,7 +58,7 @@ AUTH_USER_MODEL = "usuarios.Usuario"
 
 # ——— Middleware ———
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",  # CORS siempre arriba
+    "corsheaders.middleware.CorsMiddleware",  # CORS arriba
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -66,7 +67,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    # Si tienes este middleware en core/middleware.py, déjalo. Si no existe, bórralo de aquí.
+    # Deja este si existe; si no, quítalo.
     "core.middleware.RoleAuthorizationMiddleware",
 ]
 
@@ -93,10 +94,7 @@ WSGI_APPLICATION = "claro_project.wsgi.application"
 # ——— Base de datos ———
 def db_from_url(url: str):
     if not url:
-        return {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        }
+        return {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}
     parsed = urlparse(url)
     engine = {
         "postgres": "django.db.backends.postgresql",
@@ -148,16 +146,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ——— DRF / JWT / Filters ———
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        # Usa tu autenticación por cookie (la que ya tienes en usuarios/auth_cookie.py)
-        "usuarios.auth_cookie.CookieJWTAuthentication",
-        # Fallback por header Authorization: Bearer
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-        # Para admin de Django y Browsable API
-        "rest_framework.authentication.SessionAuthentication",
+        "usuarios.auth_cookie.CookieJWTAuthentication",  # cookies HttpOnly
+        "rest_framework_simplejwt.authentication.JWTAuthentication",  # Bearer fallback
+        "rest_framework.authentication.SessionAuthentication",        # admin
     ),
-    "DEFAULT_PERMISSION_CLASSES": (
-        "rest_framework.permissions.IsAuthenticated",
-    ),
+    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_FILTER_BACKENDS": (
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.SearchFilter",
@@ -168,10 +161,7 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",
     ],
-    "DEFAULT_THROTTLE_RATES": {
-        "anon": "50/min",
-        "user": "200/min",
-    },
+    "DEFAULT_THROTTLE_RATES": {"anon": "50/min", "user": "200/min"},
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
 }
@@ -184,29 +174,22 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
-# —— Cookies JWT (para tu auth por cookies) ——
-JWT_LOGIN_RETURN_TOKENS    = env_bool("JWT_LOGIN_RETURN_TOKENS", False)
-JWT_AUTH_COOKIE            = env("JWT_AUTH_COOKIE", "access")
-JWT_AUTH_REFRESH_COOKIE    = env("JWT_AUTH_REFRESH_COOKIE", "refresh")
-JWT_COOKIE_SAMESITE        = env("JWT_COOKIE_SAMESITE", "Lax")
-JWT_COOKIE_SECURE          = env_bool("JWT_COOKIE_SECURE", False)
-JWT_COOKIE_DOMAIN          = (env("JWT_COOKIE_DOMAIN") or None)  # None si vacío
-JWT_COOKIE_PATH            = env("JWT_COOKIE_PATH", "/")
+# —— Cookies JWT —— 
+JWT_LOGIN_RETURN_TOKENS = env_bool("JWT_LOGIN_RETURN_TOKENS", False)
+JWT_AUTH_COOKIE         = env("JWT_AUTH_COOKIE", "access")
+JWT_AUTH_REFRESH_COOKIE = env("JWT_AUTH_REFRESH_COOKIE", "refresh")
+JWT_COOKIE_SAMESITE     = env("JWT_COOKIE_SAMESITE", "Lax")
+JWT_COOKIE_SECURE       = env_bool("JWT_COOKIE_SECURE", False)
+JWT_COOKIE_DOMAIN       = (env("JWT_COOKIE_DOMAIN") or None)
+JWT_COOKIE_PATH         = env("JWT_COOKIE_PATH", "/")
 
 # ——— Logging ———
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "formatters": {
-        "json": {"format": "%(levelname)s %(asctime)s %(name)s %(message)s"},
-    },
-    "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": "json"},
-    },
-    "root": {
-        "handlers": ["console"],
-        "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
-    },
+    "formatters": {"json": {"format": "%(levelname)s %(asctime)s %(name)s %(message)s"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "json"}},
+    "root": {"handlers": ["console"], "level": os.getenv("DJANGO_LOG_LEVEL", "INFO")},
 }
 
 # ——— OpenAPI ———
@@ -245,7 +228,7 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "no-reply@exam
 # ——— Seguridad extra (proxy/SSL) ———
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-# ——— Reglas de rutas/roles para tu middleware (si lo usas) ———
+# ——— Rutas/roles middleware (si lo usas) ———
 ROLE_ROUTE_RULES = {
     "/api/admin/": {"administrador"},
     "/api/asignaciones/": {"administrador", "tecnico"},
@@ -253,13 +236,8 @@ ROLE_ROUTE_RULES = {
     "/api/core/": {"administrador", "tecnico"},
 }
 
-# ——— WhatsApp Cloud API (desactivado por defecto) ———
-WHATSAPP_ENABLED   = env_bool("WHATSAPP_ENABLED", False)  # dejar False en prod si aún no se usa
-WHATSAPP_TOKEN     = env("WHATSAPP_TOKEN", "")            # token de app de Meta (WABA)
-WHATSAPP_PHONE_ID  = env("WHATSAPP_PHONE_ID", "")         # Phone Number ID del número en WABA
-WHATSAPP_TEST_TO   = env("WHATSAPP_TEST_TO", "")          # opcional: msisdn de pruebas (+569...)
-
-
-# ——— Swagger endpoints (opcional en urls.py) ———
-#   path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
-#   path("api/docs/",   SpectacularSwaggerView.as_view(url_name="schema")),
+# ——— WhatsApp (desactivado; futuro) ———
+WHATSAPP_ENABLED   = env_bool("WHATSAPP_ENABLED", False)
+WHATSAPP_TOKEN     = env("WHATSAPP_TOKEN", "")
+WHATSAPP_PHONE_ID  = env("WHATSAPP_PHONE_ID", "")
+WHATSAPP_TEST_TO   = env("WHATSAPP_TEST_TO", "")
