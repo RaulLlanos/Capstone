@@ -1,101 +1,193 @@
-from django.contrib.auth import authenticate
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
-from rest_framework.exceptions import AuthenticationFailed
-from rest_framework import status
-from rest_framework_simplejwt.tokens import RefreshToken
-from django.conf import settings
+# backend/usuarios/auth_views.py
+from __future__ import annotations
 
-from .auth_serializers import RegisterSerializer  # Asegúrate que el archivo se llame auth_serializers.py
-from .models import Usuario
+from django.conf import settings
+from django.contrib.auth import authenticate, get_user_model
+from django.http import JsonResponse
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import ensure_csrf_cookie
+
+from rest_framework import status
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from rest_framework_simplejwt.tokens import RefreshToken
+
+from .auth_serializers import RegisterSerializer
+
+User = get_user_model()
+
+
+# ===== helpers cookies =====
 
 def _set_cookie(response, name, value, max_age=None):
+    """
+    Setea cookies HttpOnly para access/refresh con los flags desde settings.
+    """
+    samesite = getattr(settings, "JWT_COOKIE_SAMESITE", "Lax")
+    secure = bool(getattr(settings, "JWT_COOKIE_SECURE", False))
+    domain = getattr(settings, "JWT_COOKIE_DOMAIN", None) or None
+    path = getattr(settings, "JWT_COOKIE_PATH", "/")
+
     response.set_cookie(
         name,
         value,
-        max_age=max_age,
-        path=getattr(settings, "JWT_COOKIE_PATH", "/"),
-        domain=getattr(settings, "JWT_COOKIE_DOMAIN", None),
-        secure=getattr(settings, "JWT_COOKIE_SECURE", False),
+        max_age=max_age,  # en segundos
         httponly=True,
-        samesite=getattr(settings, "JWT_COOKIE_SAMESITE", "Lax"),
+        secure=secure,
+        samesite=samesite,
+        domain=domain,
+        path=path,
     )
+    return response
+
 
 def _delete_cookie(response, name):
-    response.delete_cookie(
-        name,
-        path=getattr(settings, "JWT_COOKIE_PATH", "/"),
-        domain=getattr(settings, "JWT_COOKIE_DOMAIN", None),
-        samesite=getattr(settings, "JWT_COOKIE_SAMESITE", "Lax"),
-    )
+    domain = getattr(settings, "JWT_COOKIE_DOMAIN", None) or None
+    path = getattr(settings, "JWT_COOKIE_PATH", "/")
+    response.delete_cookie(name, domain=domain, path=path)
+    return response
+
+
+def _issue_tokens_for_user(user: User) -> dict:
+    """
+    Crea par (refresh, access) usando SimpleJWT.
+    """
+    refresh = RefreshToken.for_user(user)
+    return {
+        "refresh": str(refresh),
+        "access": str(refresh.access_token),
+    }
+
+
+# ===== Vistas =====
 
 class RegisterView(APIView):
+    """
+    Crea un usuario. Para el admin inicial usa el bootstrap (management command).
+    """
     permission_classes = [AllowAny]
 
     def post(self, request):
-        ser = RegisterSerializer(data=request.data)
-        ser.is_valid(raise_exception=True)
-        user = ser.save()
-        return Response({"id": user.id, "email": user.email}, status=201)
+        serializer = RegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        return Response(
+            {
+                "id": user.id,
+                "email": user.email,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "rol": getattr(user, "rol", None),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        data = request.data or {}
-        login = data.get("login") or data.get("email")
-        password = data.get("password")
+        # permitimos "login" (local-part o e-mail) o directamente "email"
+        login_val = request.data.get("login") or request.data.get("email")
+        password = request.data.get("password")
 
-        if not login or not password:
-            return Response({"detail": "Faltan credenciales."}, status=400)
+        if not login_val or not password:
+            return Response(
+                {"detail": "login/email y password son obligatorios."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        # Soporta login con email completo o local-part (antes de @) si no ambiguo
-        user = None
-        if "@" in login:
-            user = authenticate(request, username=login, password=password)
-        else:
-            # local-part → busca único email que empiece con local-part
-            qs = Usuario.objects.filter(email__istartswith=f"{login}@")
-            if qs.count() == 1:
-                user = authenticate(request, username=qs.first().email, password=password)
-            else:
-                # intenta igualmente authenticate (por si tu backend soporta local-part directo)
-                user = authenticate(request, username=login, password=password)
+        # Usa tu backend EmailOrLocalBackend
+        user = authenticate(request, username=login_val, password=password)
+        if not user:
+            return Response({"detail": "Credenciales inválidas."}, status=status.HTTP_401_UNAUTHORIZED)
 
-        if user is None:
-            raise AuthenticationFailed("Credenciales inválidas.")
+        # Emite tokens y setea cookies HttpOnly
+        tokens = _issue_tokens_for_user(user)
+        access_name = getattr(settings, "JWT_AUTH_COOKIE", "access")
+        refresh_name = getattr(settings, "JWT_AUTH_REFRESH_COOKIE", "refresh")
 
-        # Genera tokens y setea cookies HttpOnly
-        refresh = RefreshToken.for_user(user)
-        access = refresh.access_token
-
-        resp = Response({
-            "id": user.id,
-            "email": user.email,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "rol": user.rol,
-        }, status=200)
-
-        _set_cookie(resp, getattr(settings, "JWT_AUTH_COOKIE", "access"), str(access), max_age=15*60)
-        _set_cookie(resp, getattr(settings, "JWT_AUTH_REFRESH_COOKIE", "refresh"), str(refresh), max_age=30*24*3600)
+        resp = Response(
+            {
+                "id": user.id,
+                "email": user.email,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "rol": getattr(user, "rol", None),
+            },
+            status=status.HTTP_200_OK,
+        )
+        # access ~ minutos, refresh ~ días (según settings SIMPLE_JWT)
+        resp = _set_cookie(resp, access_name, tokens["access"])
+        resp = _set_cookie(resp, refresh_name, tokens["refresh"])
         return resp
+
+
+class RefreshCookieView(APIView):
+    """
+    Lee el refresh desde cookie y entrega un nuevo access (cookie).
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        refresh_name = getattr(settings, "JWT_AUTH_REFRESH_COOKIE", "refresh")
+        access_name = getattr(settings, "JWT_AUTH_COOKIE", "access")
+        refresh_token = request.COOKIES.get(refresh_name)
+
+        if not refresh_token:
+            return Response({"detail": "No hay refresh en cookie."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        try:
+            refresh = RefreshToken(refresh_token)
+            new_access = str(refresh.access_token)
+        except Exception:
+            return Response({"detail": "Refresh inválido o expirado."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        resp = Response({"detail": "Access renovado."}, status=status.HTTP_200_OK)
+        resp = _set_cookie(resp, access_name, new_access)
+        return resp
+
 
 class LogoutView(APIView):
+    """
+    Borra cookies access y refresh. (Permite cerrar sesión aunque el access haya expirado).
+    """
+    permission_classes = [AllowAny]
+
     def post(self, request):
-        resp = Response({"detail": "ok"})
-        _delete_cookie(resp, getattr(settings, "JWT_AUTH_COOKIE", "access"))
-        _delete_cookie(resp, getattr(settings, "JWT_AUTH_REFRESH_COOKIE", "refresh"))
+        access_name = getattr(settings, "JWT_AUTH_COOKIE", "access")
+        refresh_name = getattr(settings, "JWT_AUTH_REFRESH_COOKIE", "refresh")
+        resp = Response({"detail": "Sesión finalizada."}, status=status.HTTP_200_OK)
+        resp = _delete_cookie(resp, access_name)
+        resp = _delete_cookie(resp, refresh_name)
         return resp
 
+
 class MeView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
-        u = request.user
-        return Response({
-            "id": u.id,
-            "email": u.email,
-            "first_name": u.first_name,
-            "last_name": u.last_name,
-            "rol": u.rol,
-        })
+        user = request.user
+        return Response(
+            {
+                "id": user.id,
+                "email": user.email,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "rol": getattr(user, "rol", None),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+@method_decorator(ensure_csrf_cookie, name="dispatch")
+class CsrfTokenView(APIView):
+    """
+    Entrega/asegura cookie CSRF (útil si vas a hacer POST same-site con fetch).
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return JsonResponse({"detail": "CSRF cookie set"}, status=200)
