@@ -32,9 +32,8 @@ export default function NavBar() {
     if (isAdmin) {
       return [
         { to: "/auditor/direcciones", label: "Direcciones" },
-        { to: "/auditor/direcciones/nueva", label: "Añadir dirección" },
-        { to: "/auditor/historial", label: "Historial" },
-        { to: "/registro", label: "Crear usuario" },
+        { to: "/admin/usuarios", label: "Usuarios" },
+        { to: "/auditor/historial", label: "Historial" }
       ];
     }
     if (isTecnico) return [
