@@ -208,6 +208,43 @@ export default function AuditorHistorial() {
     return isNaN(d) ? String(raw) : d.toLocaleString("es-CL");
   };
 
+  const [exporting, setExporting] = useState(false);
+
+async function handleExport() {
+  try {
+    setExporting(true);
+    setError("");
+    // Asegurar CSRF y encabezados
+    await api.get("/auth/csrf").catch(() => {});
+
+    // Pedir exportación XLSX (puedes cambiar a "csv" si prefieres)
+    const res = await api.post(
+      "/api/asignaciones/historial/export/",
+      { format: "xlsx" },
+      { responseType: "blob" }
+    );
+
+    // Descargar archivo
+    const blob = new Blob([res.data], {
+      type:
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "historial_asignaciones.xlsx";
+    a.click();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error("Exportar falló:", err?.response?.status, err?.response?.data);
+    const data = err?.response?.data || {};
+    setError(data.detail || data.error || "No se pudo exportar el historial.");
+  } finally {
+    setExporting(false);
+  }
+}
+
+
   return (
     <div className={styles.wrapper}>
       <div className={styles.card} style={{ maxWidth: 1100 }}>
@@ -215,6 +252,22 @@ export default function AuditorHistorial() {
           <h1 className={styles.title}>Historial de Asignaciones</h1>
           <p className={styles.subtitle}>Registro completo de acciones</p>
         </header>
+
+        {/* Botón Exportar */}
+        {isAdmin && (
+        <div style={{ marginBottom: 12 }}>
+            <button
+            type="button"
+            className={styles.button}
+            style={{ background: "#2563eb" }}
+            onClick={handleExport}
+            disabled={exporting}
+            >
+            {exporting ? "Exportando..." : "Exportar todo (XLSX)"}
+            </button>
+        </div>
+        )}
+
 
         {!isAdmin && (
           <div className={styles.error}>
@@ -298,10 +351,8 @@ export default function AuditorHistorial() {
                       <tr>
                         <th style={th}>Fecha</th>
                         <th style={th}>Acción</th>
-                        <th style={th}>Técnico</th>
                         <th style={th}>Dirección</th>
                         <th style={th}>Comuna</th>
-                        <th style={th}>Zona</th>
                         <th style={th}>Usuario que realizó la acción</th>
                       </tr>
                     </thead>
@@ -312,10 +363,8 @@ export default function AuditorHistorial() {
                           <td style={{ ...td, fontWeight: 600, color: colorAccion(h.accion) }}>
                             {h.accion || "—"}
                           </td>
-                          <td style={td}>{h.tecnico_nombre || "—"}</td>
                           <td style={td}>{h.direccion || "—"}</td>
                           <td style={td}>{h.comuna || "—"}</td>
-                          <td style={td}>{h.zona || "—"}</td>
                           <td style={td}>{h.usuario_nombre || h.usuario_email || "—"}</td>
                         </tr>
                       ))}
