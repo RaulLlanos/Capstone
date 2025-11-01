@@ -126,6 +126,13 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
+# Autenticación Django (para authenticate() en /auth/login)
+AUTHENTICATION_BACKENDS = [
+    "usuarios.backends.EmailOrLocalBackend",   # tu backend: email o local-part
+    "django.contrib.auth.backends.ModelBackend",
+]
+
+
 # ——— i18n ———
 LANGUAGE_CODE = "es-cl"
 TIME_ZONE = "America/Santiago"
