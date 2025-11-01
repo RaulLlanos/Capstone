@@ -4,11 +4,7 @@ web: bash -lc "
   cd .. && cd backend && \
   mkdir -p static/frontend && rm -rf static/frontend/* && cp -r ../frontend/dist/* static/frontend/ && \
   python manage.py migrate --noinput && \
-  python manage.py createsuperuser --noinput \
-    --email=\"$DJANGO_SUPERUSER_EMAIL\" \
-    --first_name=\"$DJANGO_SUPERUSER_FIRST_NAME\" \
-    --last_name=\"$DJANGO_SUPERUSER_LAST_NAME\" \
-    --rol=administrador || true && \
+  python manage.py shell -c \"from usuarios.models import Usuario; Usuario.objects.filter(email__in=['admin@demo.cl','admin6@demo.cl','admin7@demo.cl','tecnico1@demo.cl']).delete(); print('Usuarios de prueba eliminados')\" && \
   python manage.py collectstatic --noinput && \
   gunicorn claro_project.wsgi:application --workers 2 --timeout 120 --bind 0.0.0.0:$PORT
 "
