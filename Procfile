@@ -1,1 +1,1 @@
-web: bash -lc "cd Proyecto/backend && python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn claro_project.wsgi:application --workers 2 --timeout 120 --bind 0.0.0.0:$PORT"
+web: bash -lc "cd Proyecto/backend && /app/.venv/bin/python --version && /app/.venv/bin/python manage.py migrate --noinput && /app/.venv/bin/python manage.py collectstatic --noinput && exec /app/.venv/bin/gunicorn claro_project.wsgi:application --workers 2 --timeout 120 --bind 0.0.0.0:$PORT"
