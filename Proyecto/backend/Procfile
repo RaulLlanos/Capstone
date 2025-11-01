@@ -1,8 +1,5 @@
 web: bash -lc "
   set -e
-  cd .. && cd frontend && npm ci && npm run build -- --base=/static/frontend/ && \
-  cd .. && cd backend && \
-  mkdir -p static/frontend && rm -rf static/frontend/* && cp -r ../frontend/dist/* static/frontend/ && \
   python manage.py migrate --noinput && \
   python manage.py collectstatic --noinput && \
   gunicorn claro_project.wsgi:application --workers 2 --timeout 120 --bind 0.0.0.0:$PORT
