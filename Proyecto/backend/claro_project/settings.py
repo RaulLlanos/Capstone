@@ -1,13 +1,13 @@
+# Proyecto/backend/claro_project/settings.py
 from pathlib import Path
 import os
 from urllib.parse import urlparse, parse_qs
 from datetime import timedelta
 from dotenv import load_dotenv
-BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / ".env")
 
 # ——— Paths ———
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 
 # ——— Helpers env ———
 def env(key: str, default: str = "") -> str:
@@ -28,7 +28,6 @@ def env_list(key: str, default: str = "") -> list[str]:
 # ——— Seguridad / Debug ———
 SECRET_KEY = env("DJANGO_SECRET_KEY", "dev-unsafe-change-me")
 DEBUG = env_bool("DEBUG", False)
-
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost")
 
 # ——— Apps ———
@@ -59,15 +58,16 @@ AUTH_USER_MODEL = "usuarios.Usuario"
 
 # ——— Middleware ———
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",  # CORS siempre arriba
+    "corsheaders.middleware.CorsMiddleware",  # CORS arriba
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    # Autorización por prefijo/rol (tu middleware)
+    # Deja este si existe; si no, quítalo.
     "core.middleware.RoleAuthorizationMiddleware",
 ]
 
@@ -94,10 +94,7 @@ WSGI_APPLICATION = "claro_project.wsgi.application"
 # ——— Base de datos ———
 def db_from_url(url: str):
     if not url:
-        return {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        }
+        return {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}
     parsed = urlparse(url)
     engine = {
         "postgres": "django.db.backends.postgresql",
@@ -105,7 +102,6 @@ def db_from_url(url: str):
         "pgsql": "django.db.backends.postgresql",
     }.get(parsed.scheme, "django.db.backends.postgresql")
 
-    # sslmode (require, verify-full, etc)
     q = parse_qs(parsed.query or "")
     sslmode = (q.get("sslmode", [""])[0] or "").strip()
 
@@ -140,6 +136,7 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"] if (BASE_DIR / "static").exists() else []
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
@@ -149,13 +146,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ——— DRF / JWT / Filters ———
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "core.auth.CookieOrHeaderJWTAuthentication",                  # cookies HttpOnly primero
-        "rest_framework_simplejwt.authentication.JWTAuthentication",  # fallback: Bearer
-        "rest_framework.authentication.SessionAuthentication",        # admin Django
+        "usuarios.auth_cookie.CookieJWTAuthentication",  # cookies HttpOnly
+        "rest_framework_simplejwt.authentication.JWTAuthentication",  # Bearer fallback
+        "rest_framework.authentication.SessionAuthentication",        # admin
     ),
-    "DEFAULT_PERMISSION_CLASSES": (
-        "rest_framework.permissions.IsAuthenticated",
-    ),
+    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_FILTER_BACKENDS": (
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.SearchFilter",
@@ -166,15 +161,12 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",
     ],
-    "DEFAULT_THROTTLE_RATES": {
-        "anon": "50/min",
-        "user": "200/min",
-    },
+    "DEFAULT_THROTTLE_RATES": {"anon": "50/min", "user": "200/min"},
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
 }
 
-# —— JWT (lifetimes para SimpleJWT y nombres/flags de cookies) ——
+# —— JWT (SimpleJWT) —— 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(env("JWT_ACCESS_MINUTES", "30"))),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=int(env("JWT_REFRESH_DAYS", "7"))),
@@ -182,36 +174,25 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
-# Variables que usan tus vistas y la auth por cookies
+# —— Cookies JWT —— 
 JWT_LOGIN_RETURN_TOKENS = env_bool("JWT_LOGIN_RETURN_TOKENS", False)
-JWT_AUTH_COOKIE = env("JWT_AUTH_COOKIE", "access")
+JWT_AUTH_COOKIE         = env("JWT_AUTH_COOKIE", "access")
 JWT_AUTH_REFRESH_COOKIE = env("JWT_AUTH_REFRESH_COOKIE", "refresh")
-JWT_COOKIE_SAMESITE = env("JWT_COOKIE_SAMESITE", "Lax")
-JWT_COOKIE_SECURE = env_bool("JWT_COOKIE_SECURE", False)
-# Usa None si viene vacío, para que Django no meta un dominio inválido:
-JWT_COOKIE_DOMAIN = (env("JWT_COOKIE_DOMAIN") or None)
-JWT_COOKIE_PATH = env("JWT_COOKIE_PATH", "/")
+JWT_COOKIE_SAMESITE     = env("JWT_COOKIE_SAMESITE", "Lax")
+JWT_COOKIE_SECURE       = env_bool("JWT_COOKIE_SECURE", False)
+JWT_COOKIE_DOMAIN       = (env("JWT_COOKIE_DOMAIN") or None)
+JWT_COOKIE_PATH         = env("JWT_COOKIE_PATH", "/")
 
+# ——— Logging ———
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "formatters": {
-        "json": {
-            "format": "%(levelname)s %(asctime)s %(name)s %(message)s",
-        },
-    },
-    "handlers": {
-        "console": {
-            "class": "logging.StreamHandler",
-            "formatter": "json",
-        },
-    },
-    "root": {
-        "handlers": ["console"],
-        "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
-    },
+    "formatters": {"json": {"format": "%(levelname)s %(asctime)s %(name)s %(message)s"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "json"}},
+    "root": {"handlers": ["console"], "level": os.getenv("DJANGO_LOG_LEVEL", "INFO")},
 }
 
+# ——— OpenAPI ———
 SPECTACULAR_SETTINGS = {
     "TITLE": "Claro API",
     "DESCRIPTION": "API de auditorías/asignaciones",
@@ -244,10 +225,10 @@ EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", False)
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "no-reply@example.com")
 
-# ——— Seguridad extra (prod detrás de proxy/SSL) ———
+# ——— Seguridad extra (proxy/SSL) ———
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-# ——— Reglas de rutas/roles para tu middleware ———
+# ——— Rutas/roles middleware (si lo usas) ———
 ROLE_ROUTE_RULES = {
     "/api/admin/": {"administrador"},
     "/api/asignaciones/": {"administrador", "tecnico"},
@@ -255,6 +236,8 @@ ROLE_ROUTE_RULES = {
     "/api/core/": {"administrador", "tecnico"},
 }
 
-# ——— Swagger endpoints (opcional en urls.py) ———
-#   path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
-#   path("api/docs/",   SpectacularSwaggerView.as_view(url_name="schema")),
+# ——— WhatsApp (desactivado; futuro) ———
+WHATSAPP_ENABLED   = env_bool("WHATSAPP_ENABLED", False)
+WHATSAPP_TOKEN     = env("WHATSAPP_TOKEN", "")
+WHATSAPP_PHONE_ID  = env("WHATSAPP_PHONE_ID", "")
+WHATSAPP_TEST_TO   = env("WHATSAPP_TEST_TO", "")

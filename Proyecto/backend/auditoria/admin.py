@@ -109,8 +109,8 @@ class AuditoriaVisitaAdmin(admin.ModelAdmin):
     list_filter = (
         "customer_status",
         "ont_modem_ok",
-        "resolution",
-        "info_type",
+        "solucion_gestion",   # antes: resolution
+        "info_tipo",  # antes: info_type
         ("created_at", admin.DateFieldListFilter),
     )
 
