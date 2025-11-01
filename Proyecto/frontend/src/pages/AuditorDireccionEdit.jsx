@@ -1,4 +1,4 @@
-/* eslint-disable no-unused-vars */
+/* eslint-disable no-prototype-builtins */
 // src/pages/AuditorDireccionEdit.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -14,11 +14,9 @@ const ENCUESTAS = [
   { value: "instalacion", label: "Instalación"   },
   { value: "operaciones", label: "Operaciones"   },
 ];
-
-// Estados reales del backend (en mayúsculas)
 const ESTADOS = ["PENDIENTE", "ASIGNADA", "VISITADA", "CANCELADA", "REAGENDADA"];
 
-// Comunas de Santiago agrupadas por zona (placeholder amigable)
+// Comunas de Santiago agrupadas por zona
 const COMUNAS_POR_ZONA = {
   NORTE: [
     "Huechuraba", "Recoleta", "Independencia", "Conchalí",
@@ -35,16 +33,6 @@ const COMUNAS_POR_ZONA = {
     "Puente Alto", "Pirque"
   ],
 };
-
-// Endpoints candidatos para listar usuarios técnicos
-const TECH_ENDPOINTS = [
-  "/api/usuarios/?role=tecnico",
-  "/auth/users/?role=tecnico",
-  "/api/users/?role=tecnico",
-  "/api/usuarios/",
-  "/auth/users/",
-  "/api/users/",
-];
 
 export default function AuditorDireccionEdit() {
   const { id } = useParams();
@@ -65,46 +53,37 @@ export default function AuditorDireccionEdit() {
     encuesta: "",
     id_qualtrics: "",
     estado: "PENDIENTE",
-    // En UI seguimos usando "tecnico" (id como string). Al guardar mapeamos a asignado_a.
+    // Guardamos el id del técnico por si se necesita en otro flujo
     tecnico: "",
   });
 
+  const [tecnicoNombre, setTecnicoNombre] = useState("Sin técnico");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
 
-  // Técnicos para el dropdown
-  const [techs, setTechs] = useState([{ value: "", label: "Sin asignar" }]);
-  const [loadingTechs, setLoadingTechs] = useState(true);
-
-  // Comunas disponibles según zona
+  // Comunas disponibles según la zona elegida
   const comunasOptions = useMemo(
     () => (COMUNAS_POR_ZONA[form.zona] ?? []),
     [form.zona]
   );
 
-  // Normaliza un array de usuarios cualesquiera -> [{value:<id>, label:<nombre/email>, role}]
-  const normalizeUsers = (raw) => {
-    const arr = Array.isArray(raw?.results) ? raw.results : Array.isArray(raw) ? raw : [];
-    return arr
-      .map((u) => {
-        const id = u.id ?? u.pk ?? null;
-        const email = u.email ?? u.user?.email ?? u.username ?? "";
-        const role = (u.role ?? u.rol ?? "").toString().toLowerCase();
-        const name =
-          u.name ||
-          (u.first_name || u.last_name ? `${u.first_name || ""} ${u.last_name || ""}`.trim() : "") ||
-          u.full_name || u.display_name || "";
-        const label = [name, email].filter(Boolean).join(" — ") || email || name || `Técnico #${id ?? "?"}`;
-        if (!id) return null;
-        return { value: String(id), label, role };
-      })
-      .filter(Boolean);
+  // Helpers
+  const pickUserLabel = (u) => {
+    if (!u) return "Sin técnico";
+    const id = u.id ?? u.pk ?? null;
+    const email = u.email ?? u.user?.email ?? u.username ?? "";
+    const name =
+      u.name ||
+      (u.first_name || u.last_name ? `${u.first_name || ""} ${u.last_name || ""}`.trim() : "") ||
+      u.full_name || u.display_name || "";
+    const label = [name, email].filter(Boolean).join(" — ") || email || name || (id ? `Técnico #${id}` : "Técnico");
+    return label || "Sin técnico";
   };
 
-  // Cargar detalle de la asignación
+  // Cargar detalle
   useEffect(() => {
     (async () => {
       try {
@@ -112,17 +91,26 @@ export default function AuditorDireccionEdit() {
         const res = await api.get(`/api/asignaciones/${id}/`);
         const d = res.data || {};
 
-        // Resolver id del técnico desde 'asignado_a' (prioritario) o 'tecnico' (fallback)
-        const pickId = (val) => {
-          if (val === null || val === undefined || val === "") return "";
-          if (typeof val === "object") return val.id ? String(val.id) : "";
-          return String(val);
+        // Resolver id y nombre del técnico desde 'asignado_a' (prioritario) o 'tecnico' (fallback)
+        let tecnicoId = "";
+        let tecnicoLabel = "Sin técnico";
+
+        const resolveFrom = (val) => {
+          if (val && typeof val === "object") {
+            tecnicoId = val.id ? String(val.id) : "";
+            tecnicoLabel = pickUserLabel(val);
+          } else if (val) {
+            tecnicoId = String(val);
+            // si solo llega id, mostramos “Técnico #id”
+            tecnicoLabel = `Técnico #${tecnicoId}`;
+          }
         };
 
-        // eslint-disable-next-line no-prototype-builtins
-        const tecnicoValue = d.hasOwnProperty("asignado_a")
-          ? pickId(d.asignado_a)
-          : pickId(d.tecnico);
+        if (d.hasOwnProperty("asignado_a")) {
+          resolveFrom(d.asignado_a);
+        } else if (d.hasOwnProperty("tecnico")) {
+          resolveFrom(d.tecnico);
+        }
 
         setForm({
           fecha: d.fecha || "",
@@ -136,8 +124,9 @@ export default function AuditorDireccionEdit() {
           encuesta: d.encuesta || "",
           id_qualtrics: d.id_qualtrics || "",
           estado: (d.estado || "PENDIENTE").toUpperCase(),
-          tecnico: tecnicoValue, // id o ""
+          tecnico: tecnicoId,
         });
+        setTecnicoNombre(tecnicoLabel);
       } catch (err) {
         console.error("GET detalle falló:", err?.response?.status, err?.response?.data);
         setError("No se pudo cargar la dirección.");
@@ -146,28 +135,6 @@ export default function AuditorDireccionEdit() {
       }
     })();
   }, [id]);
-
-  // Cargar técnicos (intentando varios endpoints)
-  useEffect(() => {
-    (async () => {
-      setLoadingTechs(true);
-      let loaded = [];
-      for (const ep of TECH_ENDPOINTS) {
-        try {
-          const res = await api.get(ep);
-          loaded = normalizeUsers(res.data);
-          if (loaded.length) break;
-        } catch (_) {
-          // probar siguiente
-        }
-      }
-      // Filtrar a role=tecnico si el endpoint no filtró
-      const onlyTechs = loaded.filter((t) => t.role === "tecnico");
-      const finalList = onlyTechs.length ? onlyTechs : loaded;
-      setTechs([{ value: "", label: "Sin asignar" }, ...finalList.map(({ value, label }) => ({ value, label }))]);
-      setLoadingTechs(false);
-    })();
-  }, []);
 
   const onChange = (e) => {
     const { name, value } = e.target;
@@ -199,34 +166,36 @@ export default function AuditorDireccionEdit() {
     return fe;
   };
 
-  // Construir payload para el backend
-  const buildFullPayload = () => {
-    const payload = {
-      fecha: form.fecha,
-      tecnologia: form.tecnologia,
-      marca: form.marca,
-      rut_cliente: form.rut_cliente.trim(),
-      id_vivienda: form.id_vivienda.trim(),
-      direccion: form.direccion.trim(),
-      comuna: form.comuna.trim(),
-      zona: form.zona,
-      encuesta: form.encuesta,
-      id_qualtrics: form.id_qualtrics.trim() || "",
-      estado: String(form.estado || "PENDIENTE").toUpperCase(),
-    };
-    if (isAdmin) {
-      // 👇 campo REAL que persiste la asignación
-      payload.asignado_a = form.tecnico ? Number(form.tecnico) : null;
-    }
-    return payload;
-  };
+  // Solo guarda campos de la dirección (no toca asignación aquí)
+  const buildPayload = () => ({
+    fecha: form.fecha,
+    tecnologia: form.tecnologia,
+    marca: form.marca,
+    rut_cliente: form.rut_cliente.trim(),
+    id_vivienda: form.id_vivienda.trim(),
+    direccion: form.direccion.trim(),
+    comuna: form.comuna.trim(),
+    zona: form.zona,
+    encuesta: form.encuesta,
+    id_qualtrics: form.id_qualtrics.trim() || "",
+    estado: String(form.estado || "PENDIENTE").toUpperCase(),
+  });
 
-  // Desasignar usando el action (mantiene historial y pone PENDIENTE)
-  async function callDesasignar() {
-    await api.get("/auth/csrf");
-    await api.patch(`/api/asignaciones/${id}/desasignar/`, {});
-    setOk("Visita desasignada.");
-    setForm((f) => ({ ...f, tecnico: "", estado: "PENDIENTE" }));
+  async function handleDesasignar() {
+    try {
+      setSaving(true);
+      await api.get("/auth/csrf");
+      await api.patch(`/api/asignaciones/${id}/desasignar/`, {});
+      setOk("Visita desasignada.");
+      setForm((f) => ({ ...f, tecnico: "", estado: "PENDIENTE" }));
+      setTecnicoNombre("Sin técnico");
+    } catch (err) {
+      const data = err?.response?.data || {};
+      setError(data.detail || data.error || "No se pudo desasignar.");
+      console.error("Desasignar falló:", err?.response?.status, err?.response?.data);
+    } finally {
+      setSaving(false);
+    }
   }
 
   const handleSave = async (e) => {
@@ -244,14 +213,7 @@ export default function AuditorDireccionEdit() {
     try {
       setSaving(true);
       await api.get("/auth/csrf");
-
-      // Si eres admin y el valor del técnico queda vacío -> usar action desasignar
-      if (isAdmin && (!form.tecnico || form.tecnico === "")) {
-        await callDesasignar();
-        return;
-      }
-
-      const payload = buildFullPayload();
+      const payload = buildPayload();
 
       try {
         await api.put(`/api/asignaciones/${id}/`, payload);
@@ -386,8 +348,8 @@ export default function AuditorDireccionEdit() {
               </label>
             </div>
 
-            {/* Estado y Técnico (asignación real) */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {/* Estado y Técnico (solo visual + botón desasignar) */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, alignItems: "end" }}>
               <label className={styles.label} style={{ margin: 0 }}>
                 Estado
                 <select className={styles.select} name="estado" value={form.estado} onChange={onChange} disabled={saving}>
@@ -396,24 +358,31 @@ export default function AuditorDireccionEdit() {
                 {fieldErrors.estado && <small className={styles.error}>{fieldErrors.estado}</small>}
               </label>
 
-              <label className={styles.label} style={{ margin: 0 }}>
-                Técnico asignado
-                <select
-                  className={styles.select}
-                  name="tecnico"
-                  value={form.tecnico}
-                  onChange={onChange}
-                  disabled={saving || loadingTechs}
+              <div className={styles.label} style={{ margin: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontWeight: 600, fontSize: 14, color: "#111827" }}>Técnico asignado</span>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      className={styles.button}
+                      onClick={handleDesasignar}
+                      disabled={saving || !form.tecnico}
+                      title={form.tecnico ? "Desasignar visita" : "No hay técnico asignado"}
+                      style={{ padding: "6px 10px" }}
+                    >
+                      Desasignar
+                    </button>
+                  )}
+                </div>
+                <div
+                  className={styles.input}
+                  style={{ background: "#f9fafb", cursor: "default", userSelect: "text" }}
+                  aria-readonly="true"
                 >
-                  {techs.map((t) => (
-                    <option key={t.value || "__none"} value={t.value}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-                {loadingTechs && <small className={styles.helper}>Cargando técnicos…</small>}
-                {fieldErrors.tecnico && <small className={styles.error}>{fieldErrors.tecnico}</small>}
-              </label>
+                  {tecnicoNombre || "Sin técnico"}
+                </div>
+                {!isAdmin && <small className={styles.helper}>Solo un administrador puede desasignar.</small>}
+              </div>
             </div>
 
             {error && <div className={styles.error}>{error}</div>}

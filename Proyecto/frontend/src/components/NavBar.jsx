@@ -33,6 +33,7 @@ export default function NavBar() {
       return [
         { to: "/auditor/direcciones", label: "Direcciones" },
         { to: "/auditor/direcciones/nueva", label: "Añadir dirección" },
+        { to: "/auditor/historial", label: "Historial" },
         { to: "/registro", label: "Crear usuario" },
       ];
     }

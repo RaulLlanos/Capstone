@@ -8,6 +8,7 @@ import TecnicoDashboard from "../pages/Tecnico";
 import Registro from "../pages/Registro";
 import Login from "../pages/Login";
 import AuditorDireccionAdd from "../pages/AuditorDireccionAdd";
+import AuditorHistorial from "../pages/AuditorHistorial";
 import TecnicoDireccionesLista from "../pages/TecnicoDireccionesLista";
 import AuditorDireccionesLista from "../pages/AuditorDireccionesLista";
 import AuditorDireccionEdit from "../pages/AuditorDireccionEdit";
@@ -101,6 +102,7 @@ function AppShell() {
             <Route path="/auditor/direcciones/nueva" element={<AuditorDireccionAdd />} />
             <Route path="/auditor/direcciones" element={<AuditorDireccionesLista />} />
             <Route path="/auditor/direcciones/:id/editar" element={<AuditorDireccionEdit />} />
+            <Route path="/auditor/historial" element={<AuditorHistorial />} />
           </Route>
 
           {/* TECNICO */}
