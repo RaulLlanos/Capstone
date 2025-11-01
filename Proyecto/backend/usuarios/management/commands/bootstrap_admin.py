@@ -1,70 +1,74 @@
-from __future__ import annotations
-
-import os
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.conf import settings
 
 User = get_user_model()
 
-def _upsert_user(email: str, password: str, first: str, last: str, rol: str,
-                 is_superuser: bool, is_staff: bool) -> User:
-    u = User.objects.filter(email__iexact=email).first()
-    if u is None:
-        u = User(email=email)
-    u.first_name = first or u.first_name
-    u.last_name = last or u.last_name
-    u.rol = rol or getattr(u, "rol", "tecnico")
-    u.is_active = True
-    u.is_staff = is_staff
-    u.is_superuser = is_superuser
-    if password:
-        u.set_password(password)
-    u.save()
-    return u
-
 class Command(BaseCommand):
-    help = "Crea/actualiza usuario admin (y opcionalmente técnico) desde variables de entorno."
+    help = "Crea o actualiza un usuario administrador (y opcionalmente un técnico) desde variables BOOTSTRAP_*"
 
-    def handle(self, *args, **options):
-        try:
-            with transaction.atomic():
-                admin_email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip()
-                admin_pass = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "").strip()
-                admin_fn   = os.getenv("BOOTSTRAP_ADMIN_FIRST_NAME", "Admin").strip()
-                admin_ln   = os.getenv("BOOTSTRAP_ADMIN_LAST_NAME", "Demo").strip()
+    def handle(self, *args, **opts):
+        # --- Admin obligatorio ---
+        admin_email = getattr(settings, "BOOTSTRAP_ADMIN_EMAIL", None)
+        admin_pass  = getattr(settings, "BOOTSTRAP_ADMIN_PASSWORD", None)
+        admin_fn    = getattr(settings, "BOOTSTRAP_ADMIN_FIRST_NAME", "Admin")
+        admin_ln    = getattr(settings, "BOOTSTRAP_ADMIN_LAST_NAME", "Demo")
 
-                if not admin_email or not admin_pass:
-                    raise CommandError("Faltan BOOTSTRAP_ADMIN_EMAIL o BOOTSTRAP_ADMIN_PASSWORD.")
+        if admin_email and admin_pass:
+            admin, created = User.objects.get_or_create(email__iexact=admin_email, defaults={
+                "email": admin_email,
+                "first_name": admin_fn,
+                "last_name": admin_ln,
+                "rol": "administrador",
+                "is_active": True,
+                "is_staff": True,
+                "is_superuser": True,
+            })
+            # Normaliza si vino por email__iexact
+            if not created and admin.email != admin_email:
+                admin.email = admin_email
 
-                admin = _upsert_user(
-                    email=admin_email,
-                    password=admin_pass,
-                    first=admin_fn,
-                    last=admin_ln,
-                    rol="administrador",
-                    is_superuser=True,
-                    is_staff=True,
-                )
-                self.stdout.write(self.style.SUCCESS(f"Admin listo: {admin.email} (id={admin.id})"))
+            # Asegura flags y nombre
+            admin.first_name  = admin_fn
+            admin.last_name   = admin_ln
+            admin.rol         = "administrador"
+            admin.is_active   = True
+            admin.is_staff    = True
+            admin.is_superuser= True
 
-                # Técnico opcional
-                tech_email = os.getenv("BOOTSTRAP_TECH_EMAIL", "").strip()
-                tech_pass  = os.getenv("BOOTSTRAP_TECH_PASSWORD", "").strip()
-                tech_fn    = os.getenv("BOOTSTRAP_TECH_FIRST_NAME", "Tec").strip()
-                tech_ln    = os.getenv("BOOTSTRAP_TECH_LAST_NAME", "Demo").strip()
+            # Setea/actualiza password
+            admin.set_password(admin_pass)
+            admin.save()
+            self.stdout.write(self.style.SUCCESS(f"Admin listo: {admin.email} (created={created})"))
+        else:
+            self.stdout.write(self.style.WARNING("BOOTSTRAP_ADMIN_EMAIL/BOOTSTRAP_ADMIN_PASSWORD no definidos; omitiendo admin."))
 
-                if tech_email and tech_pass:
-                    tech = _upsert_user(
-                        email=tech_email,
-                        password=tech_pass,
-                        first=tech_fn,
-                        last=tech_ln,
-                        rol="tecnico",
-                        is_superuser=False,
-                        is_staff=False,
-                    )
-                    self.stdout.write(self.style.SUCCESS(f"Técnico listo: {tech.email} (id={tech.id})"))
+        # --- Técnico opcional ---
+        tech_email = getattr(settings, "BOOTSTRAP_TECH_EMAIL", None)
+        tech_pass  = getattr(settings, "BOOTSTRAP_TECH_PASSWORD", None)
+        tech_fn    = getattr(settings, "BOOTSTRAP_TECH_FIRST_NAME", "Tec")
+        tech_ln    = getattr(settings, "BOOTSTRAP_TECH_LAST_NAME", "Demo")
 
-        except Exception as e:
-            raise CommandError(str(e))
+        if tech_email and tech_pass:
+            tech, created = User.objects.get_or_create(email__iexact=tech_email, defaults={
+                "email": tech_email,
+                "first_name": tech_fn,
+                "last_name": tech_ln,
+                "rol": "tecnico",
+                "is_active": True,
+                "is_staff": False,
+                "is_superuser": False,
+            })
+            if not created and tech.email != tech_email:
+                tech.email = tech_email
+
+            tech.first_name = tech_fn
+            tech.last_name  = tech_ln
+            tech.rol        = "tecnico"
+            tech.is_active  = True
+            tech.is_staff   = False
+            tech.is_superuser = False
+
+            tech.set_password(tech_pass)
+            tech.save()
+            self.stdout.write(self.style.SUCCESS(f"Técnico listo: {tech.email} (created={created})"))
