@@ -4,6 +4,7 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.http import HttpResponse
 from django.urls import path, include, re_path
+from django.views.generic import TemplateView, RedirectView
 
 from rest_framework.routers import DefaultRouter
 
@@ -30,7 +31,11 @@ def index_view(_request):
     return HttpResponse("ClaroVTR API", content_type="text/plain")
 
 urlpatterns = [
+    path("", RedirectView.as_view(url="/login/", permanent=False)),
     path("admin/", admin.site.urls),
+
+    # Ruta explícita para la vista de login (HTML)
+    path("login/", TemplateView.as_view(template_name="login.html"), name="login"),
 
     # API DRF
     path("api/", include(router.urls)),
