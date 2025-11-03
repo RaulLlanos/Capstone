@@ -91,39 +91,37 @@ class LoginView(APIView):
     authentication_classes = []
 
     def post(self, request):
-        # permitimos "login" (local-part o e-mail) o directamente "email"
-        login_val = request.data.get("login") or request.data.get("email")
-        password = request.data.get("password")
+        data = request.data or {}
+        login_val = (data.get("login") or data.get("email") or data.get("username") or "").strip()
+        password  = (data.get("password") or "").strip()
 
         if not login_val or not password:
-            return Response(
-                {"detail": "login/email y password son obligatorios."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "login/email y password son obligatorios."},
+                            status=status.HTTP_400_BAD_REQUEST)
 
-        # Usa tu backend EmailOrLocalBackend
+        # si parece email, lo normalizamos a minúsculas (opcional)
+        if "@" in login_val:
+            login_val = login_val.lower()
+
         user = authenticate(request, username=login_val, password=password)
         if not user:
-            return Response({"detail": "Credenciales inválidas."}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({"detail": "Credenciales inválidas."},
+                            status=status.HTTP_401_UNAUTHORIZED)
 
-        # Emite tokens y setea cookies HttpOnly
         tokens = _issue_tokens_for_user(user)
         access_name = getattr(settings, "JWT_AUTH_COOKIE", "access")
         refresh_name = getattr(settings, "JWT_AUTH_REFRESH_COOKIE", "refresh")
 
-        resp = Response(
-            {
-                "id": user.id,
-                "email": user.email,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
-                "rol": getattr(user, "rol", None),
-            },
-            status=status.HTTP_200_OK,
-        )
-        # access ~ minutos, refresh ~ días (según settings SIMPLE_JWT)
-        resp = _set_cookie(resp, access_name, tokens["access"])
-        resp = _set_cookie(resp, refresh_name, tokens["refresh"])
+        resp = Response({
+            "id": user.id,
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "rol": getattr(user, "rol", None),
+        }, status=status.HTTP_200_OK)
+
+        _set_cookie(resp, access_name, tokens["access"])
+        _set_cookie(resp, refresh_name, tokens["refresh"])
         return resp
 
 
