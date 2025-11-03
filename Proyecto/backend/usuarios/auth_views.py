@@ -5,7 +5,7 @@ from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.http import JsonResponse
 from django.utils.decorators import method_decorator
-from django.views.decorators.csrf import ensure_csrf_cookie
+from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
