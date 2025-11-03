@@ -85,8 +85,10 @@ class RegisterView(APIView):
         )
 
 
+@method_decorator(csrf_exempt, name="dispatch")
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []
 
     def post(self, request):
         # permitimos "login" (local-part o e-mail) o directamente "email"
