@@ -5,6 +5,9 @@ Proyecto/backend/media/
 *.log
 .venv
 migrations
+# Pero sí versionar las de backend:
+!backend/**/migrations/
+!backend/**/migrations/*.py
 Proyecto/backend/venv/
 Proyecto/backend/.venv/
 **/__pycache__/
@@ -16,3 +19,7 @@ Proyecto/backend/media/
 # Frontend
 Proyecto/gestion-tecnicos/node_modules/
 Proyecto/gestion-tecnicos/.vite/
+
+# Mantener migrations del backend
+!Proyecto/backend/**/migrations/
+!Proyecto/backend/**/migrations/*.py

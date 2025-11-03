@@ -1,1 +1,8 @@
 cookies.txt
+# Permitir migrations del backend
+!Proyecto/backend/**/migrations/
+!Proyecto/backend/**/migrations/*.py
+
+# Mantener migrations del backend
+!backend/**/migrations/
+!backend/**/migrations/*.py
