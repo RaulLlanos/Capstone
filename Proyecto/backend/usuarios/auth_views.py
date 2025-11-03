@@ -126,36 +126,27 @@ class LoginView(APIView):
 
 
 class RefreshCookieView(APIView):
-    """
-    Lee el refresh desde cookie y entrega un nuevo access (cookie).
-    """
     permission_classes = [AllowAny]
-
+    authentication_classes = []  # <— IMPORTANTE
     def post(self, request):
         refresh_name = getattr(settings, "JWT_AUTH_REFRESH_COOKIE", "refresh")
         access_name = getattr(settings, "JWT_AUTH_COOKIE", "access")
         refresh_token = request.COOKIES.get(refresh_name)
-
         if not refresh_token:
             return Response({"detail": "No hay refresh en cookie."}, status=status.HTTP_401_UNAUTHORIZED)
-
         try:
             refresh = RefreshToken(refresh_token)
             new_access = str(refresh.access_token)
         except Exception:
             return Response({"detail": "Refresh inválido o expirado."}, status=status.HTTP_401_UNAUTHORIZED)
-
         resp = Response({"detail": "Access renovado."}, status=status.HTTP_200_OK)
         resp = _set_cookie(resp, access_name, new_access)
         return resp
 
 
 class LogoutView(APIView):
-    """
-    Borra cookies access y refresh. (Permite cerrar sesión aunque el access haya expirado).
-    """
     permission_classes = [AllowAny]
-
+    authentication_classes = []  # <— IMPORTANTE
     def post(self, request):
         access_name = getattr(settings, "JWT_AUTH_COOKIE", "access")
         refresh_name = getattr(settings, "JWT_AUTH_REFRESH_COOKIE", "refresh")
