@@ -9,6 +9,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  base: "/static/",        // <— IMPORTANTE para que index.html apunte a /static/assets/...
-  plugins: [react()],
+  base: '/static/',   // <- importante
+  // ...lo demás
 });
+
