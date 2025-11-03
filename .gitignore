@@ -23,3 +23,7 @@ Proyecto/gestion-tecnicos/.vite/
 # Mantener migrations del backend
 !Proyecto/backend/**/migrations/
 !Proyecto/backend/**/migrations/*.py
+
+# Permitir versionar migrations del backend
+!Proyecto/backend/**/migrations/
+!Proyecto/backend/**/migrations/*.py
