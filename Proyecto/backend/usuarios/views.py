@@ -1,3 +1,4 @@
+#usuarios/views.py
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.filters import SearchFilter, OrderingFilter
@@ -31,3 +32,7 @@ class UsuarioViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"])
     def me(self, request):
         return Response(self.get_serializer(request.user).data)
+    
+    def update(self, request, *args, **kwargs):
+        kwargs["partial"] = True     # Acepta PUT como PATCH
+        return super().update(request, *args, **kwargs)
