@@ -41,10 +41,9 @@ urlpatterns = [
     path("auth/csrf",     CsrfTokenView.as_view()),
 
     # SPA en la raíz
-    path("", SpaView.as_view(template_name="index.html"), name="spa"),
-    # Catch-all: cualquier ruta que no sea api/admin/auth/static/media → index.html
+    path("", TemplateView.as_view(template_name="index.html"), name="spa"),
     re_path(r"^(?!api/|admin/|auth/|static/|media/).*$",
-            SpaView.as_view(template_name="index.html")),
+            TemplateView.as_view(template_name="index.html")),
 ]
 
 if settings.DEBUG:
