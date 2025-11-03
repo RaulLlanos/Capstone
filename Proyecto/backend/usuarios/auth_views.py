@@ -182,12 +182,9 @@ class MeView(APIView):
         )
 
 
-@method_decorator(ensure_csrf_cookie, name="dispatch")
 class CsrfTokenView(APIView):
-    """
-    Entrega/asegura cookie CSRF (útil si vas a hacer POST same-site con fetch).
-    """
     permission_classes = [AllowAny]
 
-    def get(self, request):
-        return JsonResponse({"detail": "CSRF cookie set"}, status=200)
+    @method_decorator(ensure_csrf_cookie)
+    def get(self, request, *args, **kwargs):
+        return Response({"detail": "CSRF cookie set"})

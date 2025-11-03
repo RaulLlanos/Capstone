@@ -235,9 +235,9 @@ CORS_ALLOWED_ORIGINS = env_list("DJANGO_CORS_ALLOWED_ORIGINS") or [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
-CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS") or [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
+CSRF_TRUSTED_ORIGINS = [
+    "https://capstone-production-02e5.up.railway.app",
+    "https://*.up.railway.app",
 ]
 CORS_ALLOW_CREDENTIALS = True
 
