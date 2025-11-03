@@ -184,6 +184,7 @@ class MeView(APIView):
 
 class CsrfTokenView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []  # MUY IMPORTANTE: evita fallar por falta de auth
 
     @method_decorator(ensure_csrf_cookie)
     def get(self, request, *args, **kwargs):

@@ -40,10 +40,12 @@ urlpatterns = [
     path("auth/me",       MeView.as_view()),
     path("auth/csrf",     CsrfTokenView.as_view()),
 
-    # SPA en la raíz
-    path("", TemplateView.as_view(template_name="index.html"), name="spa"),
+    # SPA en la raíz (con ensure_csrf_cookie)
+    path("", SpaView.as_view(template_name="index.html"), name="spa"),
+
+    # Cualquier ruta no api/admin/auth/static/media => index.html
     re_path(r"^(?!api/|admin/|auth/|static/|media/).*$",
-            TemplateView.as_view(template_name="index.html")),
+            SpaView.as_view(template_name="index.html")),
 ]
 
 if settings.DEBUG:
