@@ -33,7 +33,7 @@ from .serializers import (
     CsvRowResult,
     CargaCSVSerializer,
     AsignarmeActionSerializer,
-    EstadoClienteActionSerializer,   # ← usamos este (con motivo opcional)
+    EstadoClienteActionSerializer,   # se usa con 'motivo' opcional
     ReagendarActionSerializer,
 )
 
@@ -42,7 +42,8 @@ from core.models import Notificacion, LogSistema
 from core.notify import enviar_notificacion_real, enviar_notificacion_whatsapp
 
 
-# -------- Helpers de normalización / parsing --------
+# =================== Helpers de normalización / parsing ===================
+
 _HEADER_ALIASES = {
     "rut_cliente": ["rut_cliente", "rut", "rut cliente"],
     "id_vivienda": [
@@ -84,8 +85,10 @@ def _norm(s: str) -> str:
 
 def _s(val) -> str:
     if val is None: return ""
-    try: return str(val).strip()
-    except Exception: return ""
+    try:
+        return str(val).strip()
+    except Exception:
+        return ""
 
 def _build_header_map(raw_headers: List[str]) -> Dict[str, str]:
     norm_headers = { _norm(h): h for h in raw_headers }
@@ -101,17 +104,23 @@ def _build_header_map(raw_headers: List[str]) -> Dict[str, str]:
 def _parse_date(val):
     if not val: return None
     if hasattr(val, "year"):
-        try: return val.date() if hasattr(val, "date") else val
-        except Exception: pass
+        try:
+            return val.date() if hasattr(val, "date") else val
+        except Exception:
+            pass
     s = _s(val)
     for fmt in _DATE_FORMATS:
-        try: return datetime.strptime(s, fmt).date()
-        except Exception: pass
+        try:
+            return datetime.strptime(s, fmt).date()
+        except Exception:
+            pass
     try:
         only_date = s.split()[0]
         for fmt in ("%Y-%m-%d","%d-%m-%Y","%d/%m/%Y","%Y/%m/%d"):
-            try: return datetime.strptime(only_date, fmt).date()
-            except Exception: pass
+            try:
+                return datetime.strptime(only_date, fmt).date()
+            except Exception:
+                pass
     except Exception:
         pass
     return None
@@ -250,7 +259,8 @@ def _norm_comuna(v: str) -> str:
         return raw.strip()
 
 
-# ---------- núcleo de reagendamiento ----------
+# ========================= Núcleo de reagendamiento =========================
+
 def _bloque_label(b):
     return "10:00 a 13:00" if b == "10-13" else ("14:00 a 18:00" if b == "14-18" else (b or "-"))
 
@@ -268,7 +278,7 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
     asignacion.estado = new_estado
     asignacion.save(update_fields=["reagendado_fecha", "reagendado_bloque", "estado", "updated_at"])
 
-    # Historial
+    # Historial (usa fallback por si el Enum no tiene la constante)
     accion_val = getattr(HistorialAsignacion.Accion, "REAGENDADA", "REAGENDADA")
     detalles = (
         f"Reagendada: "
@@ -347,7 +357,7 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
             "tecnico_email": tecnico_email,
         }
 
-        # 1) EMAIL (igual que antes): si hay correo, se crea y se envía
+        # 1) EMAIL
         notif_email = Notificacion.objects.create(
             tipo="reagendo",
             asignacion=asignacion,
@@ -360,7 +370,7 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
         if tecnico_email:
             enviar_notificacion_real(notif_email)
 
-        # 2) WHATSAPP: solo si está habilitado y el técnico tiene teléfono
+        # 2) WHATSAPP (si está habilitado)
         if getattr(settings, "WHATSAPP_ENABLED", False) and tecnico_phone:
             notif_wsp = Notificacion.objects.create(
                 tipo="reagendo",
@@ -374,7 +384,8 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
             enviar_notificacion_whatsapp(notif_wsp)
 
 
-# ---------------------------------------------------
+# ========================= ViewSet principal =========================
+
 class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     """
     - Administrador: CRUD total + carga CSV/XLSX + reasignar/desasignar.
@@ -449,7 +460,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
         HistorialAsignacion.objects.create(
             asignacion=obj,
-            accion=HistorialAsignacion.Accion.ASIGNADA_TECNICO,
+            accion=getattr(HistorialAsignacion.Accion, "ASIGNADA_TECNICO", "ASIGNADA_TECNICO"),
             detalles=f"Asignada a {u.email}.",
             usuario=u,
         )
@@ -488,7 +499,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
             HistorialAsignacion.objects.create(
                 asignacion=obj,
-                accion=HistorialAsignacion.Accion.DESASIGNADA,
+                accion=getattr(HistorialAsignacion.Accion, "DESASIGNADA", "DESASIGNADA"),
                 detalles="Desasignada por el propio técnico." + (f" Motivo: {motivo}" if motivo else ""),
                 usuario=u,
             )
@@ -696,8 +707,9 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             for k, v in defaults.items():
                 setattr(obj, k, v)
 
+            # Si viene bloque en archivo, guárdalo como reagendado_bloque (mantiene contrato de UI)
             if bloque:
-                obj.reagendado_bloque = None
+                obj.reagendado_bloque = bloque
 
             if asignado:
                 obj.asignado_a = asignado
@@ -713,7 +725,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             if was_created:
                 HistorialAsignacion.objects.create(
                     asignacion=obj,
-                    accion=HistorialAsignacion.Accion.CREADA,
+                    accion=getattr(HistorialAsignacion.Accion, "CREADA", "CREADA"),
                     detalles=f"Creada por carga XLS/CSV. {'Asignada a ' + asignado.email if asignado else 'Sin técnico'}",
                     usuario=request.user,
                 )
@@ -721,7 +733,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
             else:
                 HistorialAsignacion.objects.create(
                     asignacion=obj,
-                    accion=HistorialAsignacion.Accion.EDITADA,
+                    accion=getattr(HistorialAsignacion.Accion, "EDITADA", "EDITADA"),
                     detalles="Actualizada por carga XLS/CSV.",
                     usuario=request.user,
                 )
@@ -762,7 +774,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         obj.save()
         HistorialAsignacion.objects.create(
             asignacion=obj,
-            accion=HistorialAsignacion.Accion.DESASIGNADA,
+            accion=getattr(HistorialAsignacion.Accion, "DESASIGNADA", "DESASIGNADA"),
             detalles="Desasignada por administrador.",
             usuario=request.user,
         )
@@ -799,7 +811,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                 obj.save(update_fields=["estado", "updated_at"])
                 HistorialAsignacion.objects.create(
                     asignacion=obj,
-                    accion=HistorialAsignacion.Accion.ESTADO_CLIENTE,
+                    accion=getattr(HistorialAsignacion.Accion, "ESTADO_CLIENTE", "ESTADO_CLIENTE"),
                     detalles="Estado cliente = autoriza (asignación VISITADA).",
                     usuario=request.user,
                 )
@@ -817,7 +829,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
                 obj.save(update_fields=["estado", "updated_at"])
                 HistorialAsignacion.objects.create(
                     asignacion=obj,
-                    accion=HistorialAsignacion.Accion.ESTADO_CLIENTE,
+                    accion=getattr(HistorialAsignacion.Accion, "ESTADO_CLIENTE", "ESTADO_CLIENTE"),
                     detalles=f"Estado cliente = {estado} (asignación CANCELADA).",
                     usuario=request.user,
                 )

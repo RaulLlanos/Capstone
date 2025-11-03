@@ -1,4 +1,4 @@
-#usuarios/views.py
+# backend/usuarios/views.py
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.filters import SearchFilter, OrderingFilter
@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from core.permissions import AdminAuditorFull_TechReadOnly
 from .models import Usuario
 from .serializers import UsuarioSerializer
+
 
 class UsuarioViewSet(viewsets.ModelViewSet):
     """
@@ -32,7 +33,8 @@ class UsuarioViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"])
     def me(self, request):
         return Response(self.get_serializer(request.user).data)
-    
+
     def update(self, request, *args, **kwargs):
-        kwargs["partial"] = True     # Acepta PUT como PATCH
+        # Acepta PUT como PATCH para no exigir todos los campos
+        kwargs["partial"] = True
         return super().update(request, *args, **kwargs)
