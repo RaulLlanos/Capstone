@@ -95,6 +95,7 @@ WSGI_APPLICATION = "claro_project.wsgi.application"
 def db_from_url(url: str):
     if not url:
         return {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}
+
     parsed = urlparse(url)
     engine = {
         "postgres": "django.db.backends.postgresql",
@@ -103,17 +104,37 @@ def db_from_url(url: str):
     }.get(parsed.scheme, "django.db.backends.postgresql")
 
     q = parse_qs(parsed.query or "")
-    sslmode = (q.get("sslmode", [""])[0] or "").strip()
+
+    # EXTRA: toma parámetros útiles y pásalos a psycopg vía OPTIONS
+    options = {}
+    def _first(name, default=""):
+        return (q.get(name, [default])[0] or "").strip()
+
+    sslmode = _first("sslmode")
+    if sslmode:
+        options["sslmode"] = sslmode
+
+    # Estos los soporta libpq/psycopg:
+    for k in ["hostaddr", "connect_timeout", "sslrootcert", "sslcert", "sslkey", "options", "target_session_attrs"]:
+        v = _first(k)
+        if v:
+            # cast a int donde corresponde
+            if k == "connect_timeout":
+                try:
+                    v = int(v)
+                except ValueError:
+                    pass
+            options[k] = v
 
     return {
         "ENGINE": engine,
         "NAME": (parsed.path or "/")[1:] or "",
         "USER": parsed.username or "",
         "PASSWORD": parsed.password or "",
-        "HOST": parsed.hostname or "",
+        "HOST": parsed.hostname or "",  # podemos seguir usando el hostname
         "PORT": str(parsed.port or ""),
         "CONN_MAX_AGE": 60,
-        "OPTIONS": ({"sslmode": sslmode} if sslmode else {}),
+        "OPTIONS": options,             # <- ahora sí pasa hostaddr, connect_timeout, etc.
     }
 
 DATABASES = {"default": db_from_url(env("DATABASE_URL"))}
