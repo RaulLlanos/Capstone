@@ -349,31 +349,46 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
 
         # 1) EMAIL (igual que antes): si hay correo, se crea y se envía
         notif_email = Notificacion.objects.create(
+        tipo="reagendo",
+        asignacion=asignacion,
+        canal=Notificacion.Canal.EMAIL if tecnico_email else Notificacion.Canal.NONE,
+        destino=tecnico_email or "",
+        provider="",
+        payload=payload,
+        status=Notificacion.Estado.QUEUED,
+    )
+    if tecnico_email:
+        try:
+            enviar_notificacion_real(notif_email)
+        except Exception as e:
+            # No bloquear el request si SMTP falla
+            try:
+                notif_email.status = Notificacion.Estado.FAILED
+                notif_email.error = (str(e) or "")[:500]
+                notif_email.save(update_fields=["status", "error"])
+            except Exception:
+                pass
+
+    # 2) WHATSAPP: solo si está habilitado y el técnico tiene teléfono
+    if getattr(settings, "WHATSAPP_ENABLED", False) and tecnico_phone:
+        notif_wsp = Notificacion.objects.create(
             tipo="reagendo",
             asignacion=asignacion,
-            canal=Notificacion.Canal.EMAIL if tecnico_email else Notificacion.Canal.NONE,
-            destino=tecnico_email or "",
+            canal=Notificacion.Canal.WEBHOOK,
+            destino=str(tecnico_phone),
             provider="",
             payload=payload,
             status=Notificacion.Estado.QUEUED,
         )
-        if tecnico_email:
-            enviar_notificacion_real(notif_email)
-
-        # 2) WHATSAPP: solo si está habilitado y el técnico tiene teléfono
-        if getattr(settings, "WHATSAPP_ENABLED", False) and tecnico_phone:
-            notif_wsp = Notificacion.objects.create(
-                tipo="reagendo",
-                asignacion=asignacion,
-                canal=Notificacion.Canal.WEBHOOK,  # usamos WEBHOOK para WhatsApp
-                destino=str(tecnico_phone),
-                provider="",
-                payload=payload,
-                status=Notificacion.Estado.QUEUED,
-            )
+        try:
             enviar_notificacion_whatsapp(notif_wsp)
-
-
+        except Exception as e:
+            try:
+                notif_wsp.status = Notificacion.Estado.FAILED
+                notif_wsp.error = (str(e) or "")[:500]
+                notif_wsp.save(update_fields=["status", "error"])
+            except Exception:
+                pass
 # ---------------------------------------------------
 class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     """
