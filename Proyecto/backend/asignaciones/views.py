@@ -1,5 +1,3 @@
-# asignaciones/views.py
-
 from datetime import datetime
 import csv
 import io
@@ -357,7 +355,7 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
             "tecnico_email": tecnico_email,
         }
 
-        # 1) EMAIL
+        # 1) EMAIL (no bloquear si falla SMTP)
         notif_email = Notificacion.objects.create(
             tipo="reagendo",
             asignacion=asignacion,
@@ -368,9 +366,17 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
             status=Notificacion.Estado.QUEUED,
         )
         if tecnico_email:
-            enviar_notificacion_real(notif_email)
+            try:
+                enviar_notificacion_real(notif_email)
+            except Exception as e:
+                try:
+                    notif_email.status = Notificacion.Estado.FAILED
+                    notif_email.error = (str(e) or "")[:500]
+                    notif_email.save(update_fields=["status", "error"])
+                except Exception:
+                    pass
 
-        # 2) WHATSAPP (si está habilitado)
+        # 2) WHATSAPP (si está habilitado; no bloquear si falla)
         if getattr(settings, "WHATSAPP_ENABLED", False) and tecnico_phone:
             notif_wsp = Notificacion.objects.create(
                 tipo="reagendo",
@@ -381,7 +387,15 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
                 payload=payload,
                 status=Notificacion.Estado.QUEUED,
             )
-            enviar_notificacion_whatsapp(notif_wsp)
+            try:
+                enviar_notificacion_whatsapp(notif_wsp)
+            except Exception as e:
+                try:
+                    notif_wsp.status = Notificacion.Estado.FAILED
+                    notif_wsp.error = (str(e) or "")[:500]
+                    notif_wsp.save(update_fields=["status", "error"])
+                except Exception:
+                    pass
 
 
 # ========================= ViewSet principal =========================
@@ -391,7 +405,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
     - Administrador: CRUD total + carga CSV/XLSX + reasignar/desasignar.
     - Técnico: lectura + acciones POST (/asignarme, /estado_cliente, /reagendar).
     """
-    queryset = DireccionAsignada.objects.all().order_by("-created_at")
+    queryset = DireccionAsignada.objects.select_related("asignado_a").all().order_by("-created_at")
     serializer_class = DireccionAsignadaSerializer
     permission_classes = [IsAuthenticated, AdminFull_TechReadOnlyPlusActions]
     tech_allowed_actions = {"asignarme", "desasignarme", "estado_cliente", "reagendar"}
@@ -402,7 +416,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         u = self.request.user
-        qs = DireccionAsignada.objects.all()
+        qs = DireccionAsignada.objects.select_related("asignado_a").all()
 
         if self.request.query_params.get("mine") and getattr(u, "rol", None) == "tecnico":
             qs = qs.filter(asignado_a_id=u.id)
@@ -797,7 +811,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         if request.method == "GET":
             return Response({
                 "ayuda": "POST con {'estado_cliente': ..., opcionalmente 'reagendado_fecha','reagendado_bloque','motivo'}. "
-                         "Si eliges 'Reagendó', debes indicar fecha/bloque.",
+                         "Si eliges 'Reagendó', debes indicar fecha/bloque (hoy o futuro).",
             })
 
         ser = EstadoClienteActionSerializer(data=request.data)
@@ -858,7 +872,7 @@ class DireccionAsignadaViewSet(viewsets.ModelViewSet):
         obj = self.get_object()
 
         if request.method == "GET":
-            return Response({"ayuda": "POST {fecha:'YYYY-MM-DD', bloque:'10-13|14-18', motivo?} para reagendar."})
+            return Response({"ayuda": "POST {fecha:'YYYY-MM-DD', bloque:'10-13|14-18', motivo?} para reagendar (hoy o futuro)."})
 
         ser = ReagendarActionSerializer(data=request.data)
         ser.is_valid(raise_exception=True)

@@ -1,4 +1,3 @@
-# auditoria/views.py
 from django.db.models import Q
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets, permissions
@@ -47,7 +46,7 @@ class AuditoriaVisitaViewSet(viewsets.ModelViewSet):
     """
     queryset = (
         AuditoriaVisita.objects
-        .select_related("asignacion", "tecnico")
+        .select_related("asignacion", "tecnico", "asignacion__asignado_a")
         .all()
         .order_by("-created_at", "-id")
     )
@@ -68,7 +67,8 @@ class AuditoriaVisitaViewSet(viewsets.ModelViewSet):
         u = self.request.user
         rol = getattr(u, "rol", None)
 
-        qs = AuditoriaVisita.objects.all().select_related("asignacion", "tecnico")
+        # Usa el queryset base (ya tiene select_related + order_by)
+        qs = self.queryset
 
         if rol == "administrador":
             return qs

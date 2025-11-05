@@ -1,4 +1,3 @@
-# Proyecto/backend/claro_project/settings.py
 from pathlib import Path
 import os
 from urllib.parse import urlparse, parse_qs
@@ -101,7 +100,8 @@ def db_from_url(url: str):
         "postgres": "django.db.backends.postgresql",
         "postgresql": "django.db.backends.postgresql",
         "pgsql": "django.db.backends.postgresql",
-    }.get(parsed.scheme, "django.db.backends.postgresql")
+    }.get(parsed.scheme, "django.db.engine.postsgresql")  # typo deliberado? corregimos:
+    engine = "django.db.backends.postgresql"
 
     q = parse_qs(parsed.query or "")
 
@@ -118,7 +118,6 @@ def db_from_url(url: str):
     for k in ["hostaddr", "connect_timeout", "sslrootcert", "sslcert", "sslkey", "options", "target_session_attrs"]:
         v = _first(k)
         if v:
-            # cast a int donde corresponde
             if k == "connect_timeout":
                 try:
                     v = int(v)
@@ -131,10 +130,10 @@ def db_from_url(url: str):
         "NAME": (parsed.path or "/")[1:] or "",
         "USER": parsed.username or "",
         "PASSWORD": parsed.password or "",
-        "HOST": parsed.hostname or "",  # podemos seguir usando el hostname
+        "HOST": parsed.hostname or "",
         "PORT": str(parsed.port or ""),
         "CONN_MAX_AGE": 60,
-        "OPTIONS": options,             # <- ahora sí pasa hostaddr, connect_timeout, etc.
+        "OPTIONS": options,
     }
 
 DATABASES = {"default": db_from_url(env("DATABASE_URL"))}
@@ -153,7 +152,6 @@ AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",
 ]
 
-
 # ——— i18n ———
 LANGUAGE_CODE = "es-cl"
 TIME_ZONE = "America/Santiago"
@@ -164,9 +162,9 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"] if (BASE_DIR / "static").exists() else []
-# WhiteNoise: comprime pero NO re-hashea nombres
-STATICFILES_STORAGE = "whitenoise.storage.CompressedStaticFilesStorage"
 
+# WhiteNoise: usa manifest para cache busting en prod
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
