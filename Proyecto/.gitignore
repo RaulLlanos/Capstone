@@ -10,5 +10,5 @@ cookies.txt
 # Permitir versionar migrations del backend
 .env
 .env.*
-cookies.txt
+backend/cookies.txt
 backend/.env
