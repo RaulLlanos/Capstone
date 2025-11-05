@@ -4,6 +4,7 @@ import io
 import re
 import unicodedata
 from typing import List, Dict, Any
+import threading  # <-- agregado: para lanzar notificaciones en background
 
 from django.db import transaction
 from django.db.models import Case, When, Value, IntegerField, Q, Count
@@ -262,6 +263,62 @@ def _norm_comuna(v: str) -> str:
 def _bloque_label(b):
     return "10:00 a 13:00" if b == "10-13" else ("14:00 a 18:00" if b == "14-18" else (b or "-"))
 
+def _enviar_notifs_reagendo(asignacion_id: int, dest_user_id: int, payload: dict):
+    """
+    Envia notificaciones (email/WhatsApp) desacopladas del request.
+    Se llama desde un hilo en background luego del commit.
+    """
+    try:
+        asignacion = DireccionAsignada.objects.select_related("asignado_a").get(pk=asignacion_id)
+        dest_user = Usuario.objects.get(pk=dest_user_id)
+    except Exception:
+        return  # si no existen, salimos silenciosamente
+
+    tecnico_email = (dest_user.email or "").strip()
+    tecnico_phone = getattr(dest_user, "telefono", None)
+
+    # 1) EMAIL (no bloquear si falla)
+    notif_email = Notificacion.objects.create(
+        tipo="reagendo",
+        asignacion=asignacion,
+        canal=Notificacion.Canal.EMAIL if tecnico_email else Notificacion.Canal.NONE,
+        destino=tecnico_email or "",
+        provider="",
+        payload=payload,
+        status=Notificacion.Estado.QUEUED,
+    )
+    if tecnico_email:
+        try:
+            enviar_notificacion_real(notif_email)
+        except Exception as e:
+            try:
+                notif_email.status = Notificacion.Estado.FAILED
+                notif_email.error = (str(e) or "")[:500]
+                notif_email.save(update_fields=["status", "error"])
+            except Exception:
+                pass
+
+    # 2) WHATSAPP (si está habilitado; no bloquear si falla)
+    if getattr(settings, "WHATSAPP_ENABLED", False) and tecnico_phone:
+        notif_wsp = Notificacion.objects.create(
+            tipo="reagendo",
+            asignacion=asignacion,
+            canal=Notificacion.Canal.WEBHOOK,  # usamos WEBHOOK para WhatsApp
+            destino=str(tecnico_phone),
+            provider="",
+            payload=payload,
+            status=Notificacion.Estado.QUEUED,
+        )
+        try:
+            enviar_notificacion_whatsapp(notif_wsp)
+        except Exception as e:
+            try:
+                notif_wsp.status = Notificacion.Estado.FAILED
+                notif_wsp.error = (str(e) or "")[:500]
+                notif_wsp.save(update_fields=["status", "error"])
+            except Exception:
+                pass
+
 def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGENDAMIENTO"):
     old_fecha = asignacion.reagendado_fecha
     old_bloque = asignacion.reagendado_bloque
@@ -315,10 +372,7 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
     except Exception:
         pass
 
-    # -------------------- Notificaciones --------------------
-    # Destinatario:
-    # - Si el actor es TÉCNICO => notificar al actor.
-    # - De lo contrario => notificar al TÉCNICO ASIGNADO (si existe).
+    # -------------------- Notificaciones (no bloqueantes) --------------------
     dest_user = None
     if getattr(usuario, "rol", "") == "tecnico":
         dest_user = usuario
@@ -328,10 +382,6 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
     if dest_user:
         tecnico_id = dest_user.id
         tecnico_nombre = (f"{(dest_user.first_name or '').strip()} {(dest_user.last_name or '').strip()}").strip() or (dest_user.email or "")
-        tecnico_email = (dest_user.email or "").strip()
-        tecnico_phone = getattr(dest_user, "telefono", None)  # si no existe el campo, quedará None
-
-        # Payload unificado (mantén claves antiguas + agregadas)
         payload = {
             # orden requerido por Claro (primero técnico):
             "tecnico_id": tecnico_id,
@@ -352,50 +402,18 @@ def _registrar_reagendamiento(asignacion, fecha, bloque, usuario, motivo="REAGEN
             "reagendado_bloque": bloque,
 
             # compatibilidad con correo anterior
-            "tecnico_email": tecnico_email,
+            "tecnico_email": getattr(dest_user, "email", "") or "",
         }
 
-        # 1) EMAIL (no bloquear si falla SMTP)
-        notif_email = Notificacion.objects.create(
-            tipo="reagendo",
-            asignacion=asignacion,
-            canal=Notificacion.Canal.EMAIL if tecnico_email else Notificacion.Canal.NONE,
-            destino=tecnico_email or "",
-            provider="",
-            payload=payload,
-            status=Notificacion.Estado.QUEUED,
-        )
-        if tecnico_email:
-            try:
-                enviar_notificacion_real(notif_email)
-            except Exception as e:
-                try:
-                    notif_email.status = Notificacion.Estado.FAILED
-                    notif_email.error = (str(e) or "")[:500]
-                    notif_email.save(update_fields=["status", "error"])
-                except Exception:
-                    pass
+        # Dispara el envío DESPUÉS del commit y en background (no bloquea el request)
+        def _go(aid=asignacion.id, uid=dest_user.id, pl=payload):
+            threading.Thread(
+                target=_enviar_notifs_reagendo,
+                args=(aid, uid, pl),
+                daemon=True
+            ).start()
 
-        # 2) WHATSAPP (si está habilitado; no bloquear si falla)
-        if getattr(settings, "WHATSAPP_ENABLED", False) and tecnico_phone:
-            notif_wsp = Notificacion.objects.create(
-                tipo="reagendo",
-                asignacion=asignacion,
-                canal=Notificacion.Canal.WEBHOOK,  # usamos WEBHOOK para WhatsApp
-                destino=str(tecnico_phone),
-                provider="",
-                payload=payload,
-                status=Notificacion.Estado.QUEUED,
-            )
-            try:
-                enviar_notificacion_whatsapp(notif_wsp)
-            except Exception as e:
-                try:
-                    notif_wsp.status = Notificacion.Estado.FAILED
-                    notif_wsp.error = (str(e) or "")[:500]
-                    notif_wsp.save(update_fields=["status", "error"])
-                except Exception:
-                    pass
+        transaction.on_commit(_go)
 
 
 # ========================= ViewSet principal =========================
