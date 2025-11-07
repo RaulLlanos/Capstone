@@ -197,7 +197,7 @@ export default function AuditorDireccionesLista() {
       await api.get("/auth/csrf");
 
       const res = await api.post(UPLOAD_ENDPOINT, form, {
-        headers: { "Content-Type": "multipart/form-data" },
+        headers: { "Content-Type": "multipart/form-data/" },
       });
 
       // Mensaje amigable según respuesta
@@ -238,7 +238,7 @@ export default function AuditorDireccionesLista() {
         </header>
 
         <div className={styles.actions} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Link to="/auditor/direcciones/nueva" className={styles.button}>+ Nueva dirección</Link>
+          <Link to="/auditor/direcciones/nueva/" className={styles.button}>+ Nueva dirección</Link>
 
           {/* Botón Importar */}
           <button
@@ -320,7 +320,7 @@ export default function AuditorDireccionesLista() {
                   <td>{it.id_vivienda}</td>
                   <td>{it.encuesta}</td>
                   <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <Link className={styles.button} to={`/auditor/direcciones/${it.id}/editar`}>Editar</Link>
+                    <Link className={styles.button} to={`/auditor/direcciones/${it.id}/editar/`}>Editar</Link>
                     <button className={styles.button} onClick={() => handleDelete(it)}>Eliminar</button>
                   </td>
                 </tr>

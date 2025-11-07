@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 // src/pages/AuditorHistorial.jsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
@@ -28,7 +29,7 @@ function normalizeUsers(raw) {
         "";
       const label = [name, email].filter(Boolean).join(" — ") || email || name || `Técnico #${id ?? "?"}`;
       if (!id) return null;
-      return { value: String(id), label, role };
+      return { value: String(id), label, role, name, email };
     })
     .filter(Boolean)
     .filter((t) => t.role === "tecnico");
@@ -39,7 +40,7 @@ function colorAccion(accion) {
   const a = String(accion).toLowerCase();
   if (a.includes("asign")) return "#2563eb";   // azul
   if (a.includes("desasign")) return "#dc2626"; // rojo
-  if (a.includes("visit")) return "#059669";    // verde
+  if (a.includes("visit") || a.includes("cerrad")) return "#059669";    // verde (visitada/cerrada)
   if (a.includes("cre")) return "#9333ea";      // morado
   if (a.includes("edit")) return "#6b7280";     // gris
   return "#111827";
@@ -83,6 +84,43 @@ export default function AuditorHistorial() {
   const sentinelRef = useRef(null);
   const observerRef = useRef(null);
   const fetchingRef = useRef(false);
+
+  // --- Mapa id -> label de técnico para resolver nombre desde asignacion_info.asignado_a ---
+  const techLabelById = useMemo(() => {
+    const map = {};
+    for (const t of techs) {
+      if (t.value) map[String(t.value)] = t.label;
+    }
+    return map;
+  }, [techs]);
+
+  // Helper para obtener el "usuario que realizó la acción"
+  const actorLabelOf = useCallback(
+    (h) => {
+      // 1) Si backend algún día trae usuario_nombre/email, úsalo
+      const rawName = h?.usuario_nombre;
+      const rawEmail = h?.usuario_email;
+      const direct = [rawName, rawEmail].filter(Boolean).join(" — ");
+      if (direct) return direct;
+
+      // 2) Inferir desde el técnico asignado a la asignación
+      //    (lo que tu historial ya trae como 'asignacion_info.asignado_a')
+      const techId =
+        h?.asignacion_info?.asignado_a ??
+        h?.asignado_a ?? // por si alguna versión lo trae plano
+        null;
+
+      if (techId != null) {
+        const label = techLabelById[String(techId)];
+        if (label) return label;
+        return `Técnico #${techId}`; // fallback legible
+      }
+
+      // 3) Si no hay nada, guión
+      return "—";
+    },
+    [techLabelById]
+  );
 
   // armar query params según filtros
   const baseListPath = "/api/asignaciones/historial/";
@@ -168,7 +206,6 @@ export default function AuditorHistorial() {
           const res = await api.get(ep);
           loaded = normalizeUsers(res.data);
           if (loaded.length) break;
-        // eslint-disable-next-line no-unused-vars
         } catch (_) { /* empty */ }
       }
       setTechs([{ value: "", label: "Todos los técnicos" }, ...loaded.map(({ value, label }) => ({ value, label }))]);
@@ -181,24 +218,27 @@ export default function AuditorHistorial() {
     loadFirstPage();
   }, [loadFirstPage]);
 
-  // filtrado cliente por texto
+  // filtrado cliente por texto (incluye el actor inferido)
   const filtered = useMemo(() => {
     if (!search.trim()) return rows;
     const q = search.toLowerCase();
-    return rows.filter((h) =>
-      [
+    return rows.filter((h) => {
+      const actor = actorLabelOf(h);
+      return [
         h?.accion,
+        h?.detalles,
         h?.usuario_nombre,
         h?.usuario_email,
-        h?.tecnico_nombre,
+        actor, // incluir inferido
         h?.direccion,
         h?.comuna,
-        h?.zona,
+        h?.marca,
+        h?.tecnologia,
       ]
         .filter(Boolean)
-        .some((txt) => String(txt).toLowerCase().includes(q))
-    );
-  }, [rows, search]);
+        .some((txt) => String(txt).toLowerCase().includes(q));
+    });
+  }, [rows, search, actorLabelOf]);
 
   const dateOf = (h) => {
     // preferimos created_at si existe; fallback a fecha
@@ -210,40 +250,33 @@ export default function AuditorHistorial() {
 
   const [exporting, setExporting] = useState(false);
 
-async function handleExport() {
-  try {
-    setExporting(true);
-    setError("");
-    // Asegurar CSRF y encabezados
-    await api.get("/auth/csrf").catch(() => {});
-
-    // Pedir exportación XLSX (puedes cambiar a "csv" si prefieres)
-    const res = await api.post(
-      "/api/asignaciones/historial/export/",
-      { format: "xlsx" },
-      { responseType: "blob" }
-    );
-
-    // Descargar archivo
-    const blob = new Blob([res.data], {
-      type:
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "historial_asignaciones.xlsx";
-    a.click();
-    window.URL.revokeObjectURL(url);
-  } catch (err) {
-    console.error("Exportar falló:", err?.response?.status, err?.response?.data);
-    const data = err?.response?.data || {};
-    setError(data.detail || data.error || "No se pudo exportar el historial.");
-  } finally {
-    setExporting(false);
+  async function handleExport() {
+    try {
+      setExporting(true);
+      setError("");
+      await api.get("/auth/csrf").catch(() => {});
+      const res = await api.post(
+        "/api/asignaciones/historial/export/",
+        { format: "xlsx" },
+        { responseType: "blob" }
+      );
+      const blob = new Blob([res.data], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "historial_asignaciones.xlsx";
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Exportar falló:", err?.response?.status, err?.response?.data);
+      const data = err?.response?.data || {};
+      setError(data.detail || data.error || "No se pudo exportar el historial.");
+    } finally {
+      setExporting(false);
+    }
   }
-}
-
 
   return (
     <div className={styles.wrapper}>
@@ -255,19 +288,18 @@ async function handleExport() {
 
         {/* Botón Exportar */}
         {isAdmin && (
-        <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 12 }}>
             <button
-            type="button"
-            className={styles.button}
-            style={{ background: "#2563eb" }}
-            onClick={handleExport}
-            disabled={exporting}
+              type="button"
+              className={styles.button}
+              style={{ background: "#2563eb" }}
+              onClick={handleExport}
+              disabled={exporting}
             >
-            {exporting ? "Exportando..." : "Exportar todo (XLSX)"}
+              {exporting ? "Exportando..." : "Exportar todo (XLSX)"}
             </button>
-        </div>
+          </div>
         )}
-
 
         {!isAdmin && (
           <div className={styles.error}>
@@ -357,17 +389,20 @@ async function handleExport() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filtered.map((h, i) => (
-                        <tr key={`${h.id || i}-${i}`} style={{ borderBottom: "1px solid #e5e7eb" }}>
-                          <td style={td}>{dateOf(h)}</td>
-                          <td style={{ ...td, fontWeight: 600, color: colorAccion(h.accion) }}>
-                            {h.accion || "—"}
-                          </td>
-                          <td style={td}>{h.direccion || "—"}</td>
-                          <td style={td}>{h.comuna || "—"}</td>
-                          <td style={td}>{h.usuario_nombre || h.usuario_email || "—"}</td>
-                        </tr>
-                      ))}
+                      {filtered.map((h, i) => {
+                        const actor = actorLabelOf(h);
+                        return (
+                          <tr key={`${h.id || i}-${i}`} style={{ borderBottom: "1px solid #e5e7eb" }}>
+                            <td style={td}>{dateOf(h)}</td>
+                            <td style={{ ...td, fontWeight: 600, color: colorAccion(h.accion) }}>
+                              {h.accion || "—"}
+                            </td>
+                            <td style={td}>{h.direccion || h?.asignacion_info?.direccion || "—"}</td>
+                            <td style={td}>{h.comuna || h?.asignacion_info?.comuna || "—"}</td>
+                            <td style={td}>{actor}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

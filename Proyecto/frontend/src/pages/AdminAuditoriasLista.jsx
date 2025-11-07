@@ -11,15 +11,44 @@ function asArray(x) {
   if (x && Array.isArray(x.results)) return x.results;
   return [];
 }
-
 function safeStr(x, fallback = "—") {
   if (x === null || x === undefined) return fallback;
   const s = String(x).trim();
   return s ? s : fallback;
 }
-
 function ensureObj(v) {
   return v && typeof v === "object" ? v : null;
+}
+
+// Endpoints “candidatos” para listar técnicos (cubre variantes de tu API)
+const TECH_ENDPOINTS = [
+  "/api/usuarios/?role=tecnico",
+  "/auth/users/?role=tecnico",
+  "/api/users/?role=tecnico",
+  "/api/usuarios/",
+  "/auth/users/",
+  "/api/users/",
+];
+
+function normalizeUsers(raw) {
+  const arr = asArray(raw);
+  return arr
+    .map((u) => {
+      const id = u.id ?? u.pk ?? null;
+      const role = (u.role ?? u.rol ?? "").toString().toLowerCase();
+      const email = u.email ?? u.user?.email ?? u.username ?? "";
+      const name =
+        u.name ||
+        (u.first_name || u.last_name ? `${u.first_name || ""} ${u.last_name || ""}`.trim() : "") ||
+        u.full_name ||
+        u.display_name ||
+        "";
+      const label = [name, email].filter(Boolean).join(" — ") || email || name || (id ? `Técnico #${id}` : "");
+      if (!id) return null;
+      return { id: String(id), role, label };
+    })
+    .filter(Boolean)
+    .filter((t) => t.role === "tecnico" || !t.role); // si el endpoint no trae rol, igual lo aceptamos
 }
 
 export default function AdminAuditoriasLista() {
@@ -27,7 +56,7 @@ export default function AdminAuditoriasLista() {
   const role = String(user?.rol || user?.role || "").toLowerCase();
   const isAdmin = role === "administrador";
 
-  const [rows, setRows] = useState([]);            // auditorías (con asignación hidratada)
+  const [rows, setRows] = useState([]);         // auditorías (con asignación hidratada)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -38,17 +67,25 @@ export default function AdminAuditoriasLista() {
   const [fMar, setFMar] = useState("");
 
   // opciones dinámicas
-  const [optTecnicos, setOptTecnicos] = useState([]); // {value, label}
-  const [optComunas, setOptComunas] = useState([]);
-  const [optMarcas, setOptMarcas] = useState([]);
+  const [optTecnicos, setOptTecnicos] = useState([{ value: "", label: "Todos los técnicos" }]);
+  const [optComunas, setOptComunas] = useState([{ value: "", label: "Todas las comunas" }]);
+  const [optMarcas, setOptMarcas] = useState([{ value: "", label: "Todas las marcas" }]);
 
-  // ------ carga auditorías y “hidratación” de asignación ------
+  // mapa id -> label para resolver nombre del técnico
+  const techLabelById = useMemo(() => {
+    const map = {};
+    for (const t of optTecnicos) {
+      if (t.value) map[String(t.value)] = t.label;
+    }
+    return map;
+  }, [optTecnicos]);
+
   useEffect(() => {
     (async () => {
       setLoading(true);
       setError("");
       try {
-        // Trae auditorías (todas o paginadas). Si tu endpoint es paginado, iteramos next
+        // 1) Traer TODAS las auditorías (paginado DRF)
         let url = "/api/auditorias/";
         let acc = [];
         for (;;) {
@@ -57,18 +94,17 @@ export default function AdminAuditoriasLista() {
           acc = acc.concat(chunk);
           const next = res.data?.next;
           if (!next) break;
-          url = next; // DRF next absoluto
+          url = next; // DRF entrega next absoluto
         }
 
-        // Si asignacion viene como id, hidratar con GET /api/asignaciones/{id}/
+        // 2) Hidratar asignaciones cuando vienen como id
         const needIds = Array.from(
           new Set(
             acc
-              .map(a => (typeof a.asignacion === "number" ? a.asignacion : null))
+              .map((a) => (typeof a.asignacion === "number" ? a.asignacion : null))
               .filter(Boolean)
           )
         );
-        // Hidratar en paralelo (simple y efectivo)
         const idToAsign = {};
         await Promise.all(
           needIds.map(async (id) => {
@@ -80,24 +116,35 @@ export default function AdminAuditoriasLista() {
             }
           })
         );
-
-        // Normaliza: a.asignacion siempre objeto
         const hydrated = acc.map((a) => {
-          if (ensureObj(a.asignacion)) return a; // ya viene expandida
+          if (ensureObj(a.asignacion)) return a;
           if (typeof a.asignacion === "number") {
             return { ...a, asignacion: idToAsign[a.asignacion] || { id: a.asignacion } };
           }
-          // nulo o desconocido
           return { ...a, asignacion: a.asignacion || {} };
         });
-
         setRows(hydrated);
 
-        // construir opciones dinámicas
-        const tecnicosSet = new Map(); // value=id|email, label
+        // 3) Construir set de valores para filtros básicos (comuna/marca)
         const comunasSet = new Set();
         const marcasSet = new Set();
+        hydrated.forEach((a) => {
+          const asg = a.asignacion || {};
+          if (asg.comuna) comunasSet.add(String(asg.comuna));
+          if (asg.marca) marcasSet.add(String(asg.marca));
+        });
+        setOptComunas([
+          { value: "", label: "Todas las comunas" },
+          ...Array.from(comunasSet.values()).sort().map((c) => ({ value: c, label: c })),
+        ]);
+        setOptMarcas([
+          { value: "", label: "Todas las marcas" },
+          ...Array.from(marcasSet.values()).sort().map((m) => ({ value: m, label: m })),
+        ]);
 
+        // 4) Armar catálogo de técnicos:
+        //    a) desde los propios datos (ids vistos en asignaciones)
+        const idsVistos = new Set();
         hydrated.forEach((a) => {
           const asg = a.asignacion || {};
           const tecObj = ensureObj(asg.asignado_a) || ensureObj(asg.tecnico);
@@ -105,45 +152,36 @@ export default function AdminAuditoriasLista() {
             (tecObj && (tecObj.id ?? tecObj.pk)) ||
             (typeof asg.asignado_a === "number" ? asg.asignado_a : null) ||
             null;
-        const tecName =
-            (tecObj && (tecObj.name || tecObj.full_name || tecObj.display_name || tecObj.email)) ||
-            asg.asignado_a_email ||
-            (tecId ? `Tec #${tecId}` : "");
-          if (tecId) tecnicosSet.set(String(tecId), tecName || `Tec #${tecId}`);
-          if (asg.comuna) comunasSet.add(String(asg.comuna));
-          if (asg.marca) marcasSet.add(String(asg.marca));
+          if (tecId != null) idsVistos.add(String(tecId));
         });
 
-        // Además, intenta traer técnicos “oficiales”
-        try {
-          const r = await api.get("/api/usuarios/?role=tecnico");
-          const cand = asArray(r.data).map((u) => {
-            const id = u.id ?? u.pk;
-            const lbl =
-              u.name ||
-              (u.first_name || u.last_name ? `${u.first_name || ""} ${u.last_name || ""}`.trim() : "") ||
-              u.full_name ||
-              u.display_name ||
-              u.email ||
-              (id ? `Tec #${id}` : "Técnico");
-            return { value: String(id), label: lbl };
-          }).filter(x => x.value);
-          cand.forEach(({ value, label }) => {
-            if (!tecnicosSet.has(value)) tecnicosSet.set(value, label);
-          });
-        } catch (_) {
-          // si falla, usamos solo los encontrados en datos
+        //    b) intentar obtener lista oficial de técnicos desde varios endpoints
+        let catalogo = [];
+        for (const ep of TECH_ENDPOINTS) {
+          try {
+            const r = await api.get(ep);
+            catalogo = normalizeUsers(r.data);
+            if (catalogo.length) break;
+          } catch (_) {
+            // probar el siguiente endpoint
+          }
         }
 
-        setOptTecnicos([{ value: "", label: "Todos los técnicos" }].concat(
-          Array.from(tecnicosSet.entries()).map(([value, label]) => ({ value, label }))
-        ));
-        setOptComunas([{ value: "", label: "Todas las comunas" }].concat(
-          Array.from(comunasSet.values()).sort().map(c => ({ value: c, label: c }))
-        ));
-        setOptMarcas([{ value: "", label: "Todas las marcas" }].concat(
-          Array.from(marcasSet.values()).sort().map(m => ({ value: m, label: m }))
-        ));
+        //    c) fusionar: ids vistos + catálogo oficial
+        const mapa = new Map();
+        // primero, del catálogo oficial
+        for (const t of catalogo) {
+          mapa.set(t.id, t.label);
+        }
+        // luego, garantizar ids vistos (aunque no tengamos el nombre real)
+        idsVistos.forEach((id) => {
+          if (!mapa.has(id)) mapa.set(id, `Técnico #${id}`);
+        });
+
+        const opcionesTecnicos = [{ value: "", label: "Todos los técnicos" }].concat(
+          Array.from(mapa.entries()).map(([value, label]) => ({ value, label }))
+        );
+        setOptTecnicos(opcionesTecnicos);
       } catch (err) {
         console.error(err);
         setError("No se pudieron cargar las auditorías.");
@@ -159,7 +197,7 @@ export default function AdminAuditoriasLista() {
     return rows.filter((a) => {
       const asg = a.asignacion || {};
 
-      // técnico: acepta tanto id (value del select) como objeto
+      // filtrar por técnico (acepta id de select)
       if (fTec) {
         const tecObj = ensureObj(asg.asignado_a) || ensureObj(asg.tecnico);
         const tecId =
@@ -173,6 +211,19 @@ export default function AdminAuditoriasLista() {
 
       if (!txt) return true;
 
+      // también dejamos buscar por nombre de técnico resuelto
+      const tecIdPlano = typeof asg.asignado_a === "number" ? String(asg.asignado_a) : "";
+      const tecObj = ensureObj(asg.asignado_a) || ensureObj(asg.tecnico);
+      const tecNombrePlano =
+        (tecObj &&
+          (tecObj.name ||
+            tecObj.full_name ||
+            tecObj.display_name ||
+            tecObj.email ||
+            tecObj.username)) ||
+        (tecIdPlano && techLabelById[tecIdPlano]) ||
+        "";
+
       const bag = [
         asg.direccion,
         asg.comuna,
@@ -181,6 +232,7 @@ export default function AdminAuditoriasLista() {
         asg.id_vivienda,
         asg.rut_cliente,
         asg.fecha,
+        tecNombrePlano,
       ]
         .filter(Boolean)
         .join(" ")
@@ -188,7 +240,7 @@ export default function AdminAuditoriasLista() {
 
       return bag.includes(txt);
     });
-  }, [rows, q, fTec, fCom, fMar]);
+  }, [rows, q, fTec, fCom, fMar, techLabelById]);
 
   if (!isAdmin) {
     return (
@@ -212,18 +264,30 @@ export default function AdminAuditoriasLista() {
         <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 8 }}>
           <input
             className={styles.input}
-            placeholder="Buscar dirección / id vivienda / rut…"
+            placeholder="Buscar dirección / id vivienda / rut / técnico…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
           <select className={styles.select} value={fTec} onChange={(e) => setFTec(e.target.value)}>
-            {optTecnicos.map(o => <option key={o.value || "__all"} value={o.value}>{o.label}</option>)}
+            {optTecnicos.map((o) => (
+              <option key={o.value || "__all"} value={o.value}>
+                {o.label}
+              </option>
+            ))}
           </select>
           <select className={styles.select} value={fCom} onChange={(e) => setFCom(e.target.value)}>
-            {optComunas.map(o => <option key={o.value || "__all"} value={o.value}>{o.label}</option>)}
+            {optComunas.map((o) => (
+              <option key={o.value || "__all"} value={o.value}>
+                {o.label}
+              </option>
+            ))}
           </select>
           <select className={styles.select} value={fMar} onChange={(e) => setFMar(e.target.value)}>
-            {optMarcas.map(o => <option key={o.value || "__all"} value={o.value}>{o.label}</option>)}
+            {optMarcas.map((o) => (
+              <option key={o.value || "__all"} value={o.value}>
+                {o.label}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -234,7 +298,7 @@ export default function AdminAuditoriasLista() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                <th style={{whiteSpace:"nowrap"}}>ID</th>
+                <th style={{ whiteSpace: "nowrap" }}>ID</th>
                 <th>Fecha</th>
                 <th>Dirección</th>
                 <th>Comuna</th>
@@ -244,64 +308,63 @@ export default function AdminAuditoriasLista() {
               </tr>
             </thead>
             <tbody>
-            {filtered.map((a) => {
+              {filtered.map((a) => {
                 const asg = a.asignacion || {};
 
-                // técnico
+                // Resolver nombre del técnico:
+                // 1) si viene expandido
                 const tecObj =
-                (asg.asignado_a && typeof asg.asignado_a === "object" ? asg.asignado_a : null) ||
-                (asg.tecnico && typeof asg.tecnico === "object" ? asg.tecnico : null);
+                  (asg.asignado_a && typeof asg.asignado_a === "object" ? asg.asignado_a : null) ||
+                  (asg.tecnico && typeof asg.tecnico === "object" ? asg.tecnico : null);
 
                 let tecName =
-                (tecObj &&
+                  (tecObj &&
                     (tecObj.name ||
-                    tecObj.full_name ||
-                    tecObj.display_name ||
-                    tecObj.email ||
-                    tecObj.username)) ||
-                asg.asignado_a_email ||
-                "—";
+                      tecObj.full_name ||
+                      tecObj.display_name ||
+                      tecObj.email ||
+                      tecObj.username)) ||
+                  asg.asignado_a_email ||
+                  "";
 
-                // si sólo hay id, intentar buscarlo en el listado de técnicos conocidos
+                // 2) si solo hay id, buscar en el mapa de técnicos
                 if (!tecObj && typeof asg.asignado_a === "number") {
-                const found = optTecnicos.find((t) => String(t.value) === String(asg.asignado_a));
-                if (found) tecName = found.label;
-                else tecName = `Tec #${asg.asignado_a}`;
+                  const idStr = String(asg.asignado_a);
+                  tecName = techLabelById[idStr] || `Técnico #${idStr}`;
                 }
 
                 return (
-                <tr
+                  <tr
                     key={a.id}
                     style={{
-                    borderTop: "1px solid #e5e7eb",
-                    height: "48px", // ← altura de fila
-                    lineHeight: "1.5em",
+                      borderTop: "1px solid #e5e7eb",
+                      height: "48px",
+                      lineHeight: "1.5em",
                     }}
-                >
+                  >
                     <td style={{ padding: "10px 12px" }}>{a.id}</td>
                     <td style={{ padding: "10px 12px" }}>{safeStr(asg.fecha)}</td>
                     <td style={{ padding: "10px 12px" }}>{safeStr(asg.direccion)}</td>
                     <td style={{ padding: "10px 12px" }}>{safeStr(asg.comuna)}</td>
-                    <td style={{ padding: "10px 12px" }}>{safeStr(tecName)}</td>
+                    <td style={{ padding: "10px 12px" }}>{safeStr(tecName || "—")}</td>
                     <td style={{ padding: "10px 12px" }}>{safeStr(asg.marca)}</td>
                     <td style={{ padding: "10px 12px" }}>
-                    <Link className={styles.button} to={`/admin/auditorias/${a.id}`}>
+                      <Link className={styles.button} to={`/admin/auditorias/${a.id}/`}>
                         Ver detalles
-                    </Link>
+                      </Link>
                     </td>
-                </tr>
+                  </tr>
                 );
-            })}
+              })}
 
-            {!loading && filtered.length === 0 && (
+              {!loading && filtered.length === 0 && (
                 <tr>
-                <td colSpan={7} className={styles.helper}>
+                  <td colSpan={7} className={styles.helper}>
                     No se encontraron resultados.
-                </td>
+                  </td>
                 </tr>
-            )}
+              )}
             </tbody>
-
           </table>
         </div>
       </div>
