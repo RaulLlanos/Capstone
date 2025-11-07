@@ -113,22 +113,39 @@ export default function AdminUsuarioEdit() {
   };
 
   // Construye payload compatible con distintas APIs
+  // Construye payload compatible con distintas APIs
   const buildPayload = () => {
-    // Enviamos rol como 'rol' (nuestro backend) y también 'role' por si aplica otro endpoint.
-    // Enviamos 'name', y dejamos opcionales first/last si el backend los usa.
+    const trimmedName = form.name?.trim() || "";
+    let first_name = "";
+    let last_name = "";
+
+    // si el usuario escribió nombre completo, intentamos dividirlo
+    if (trimmedName.includes(" ")) {
+      const parts = trimmedName.split(" ");
+      first_name = parts[0];
+      last_name = parts.slice(1).join(" ");
+    } else {
+      first_name = trimmedName;
+    }
+
     const payload = {
-      name: form.name?.trim(),
+      name: trimmedName,       // para backends que usan "name"
+      first_name,              // para backends tipo Django User
+      last_name,               // idem
       email: form.email?.trim(),
       username: form.email?.trim(), // por compatibilidad si el backend usa username
       rol: form.rol,
       role: form.rol,
     };
-    // Limpia nullables cortos
+
+    // Limpia campos vacíos
     Object.keys(payload).forEach((k) => {
-      if (payload[k] === undefined) delete payload[k];
+      if (payload[k] === undefined || payload[k] === "") delete payload[k];
     });
+
     return payload;
   };
+
 
   const handleSave = async (e) => {
     e.preventDefault();
