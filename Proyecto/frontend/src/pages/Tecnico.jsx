@@ -239,7 +239,7 @@ export default function Tecnico() {
   );
 
   // ---------- Navegación ----------
-  const goReagendar = (id) => navigate(`/tecnico/reagendar/${id}`);
+  const goReagendar = (id) => navigate(`/tecnico/reagendar/${id}/`);
 
   // Fecha/bloque a mostrar
   const renderFechaInfo = (it) => {
@@ -418,8 +418,8 @@ export default function Tecnico() {
                     onClick={() =>
                       navigate(
                         isCompletada(it)
-                          ? `/tecnico/auditoria/ver/${it.id}`
-                          : `/tecnico/auditoria/nueva/${it.id}`
+                          ? `/tecnico/auditoria/ver/${it.id}/`
+                          : `/tecnico/auditoria/nueva/${it.id}/`
                       )
                     }
                   >

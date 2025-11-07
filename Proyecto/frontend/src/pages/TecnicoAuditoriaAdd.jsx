@@ -6,7 +6,7 @@ import api from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import styles from "./Login.module.css";
 
-// --- Enums del backend ---
+// --- Enums (alineados con tu backend) ---
 const CUSTOMER_STATUS = [
   { value: "", label: "— Selecciona —" },
   { value: "AUTORIZA", label: "Autoriza" },
@@ -69,11 +69,6 @@ const BLOQUES = [
 ];
 
 // --- Utils ---
-function normalizeList(data) {
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.results)) return data.results;
-  return [];
-}
 function toYMD(d) {
   const x = d instanceof Date ? d : new Date(d);
   const y = x.getFullYear();
@@ -82,7 +77,7 @@ function toYMD(d) {
   return `${y}-${m}-${day}`;
 }
 
-// Busca si ya hay auditoría para esta asignación
+// Busca si ya hay auditoría para esta asignación (no cambia)
 async function findAuditForAsignacion(asignacionId) {
   try {
     const res = await api.get(`/api/auditorias/?asignacion=${asignacionId}`);
@@ -98,7 +93,6 @@ async function findAuditForAsignacion(asignacionId) {
   }
 }
 
-
 export default function TecnicoAuditoriaAdd() {
   const { id } = useParams(); // id de asignación
   const navigate = useNavigate();
@@ -109,7 +103,7 @@ export default function TecnicoAuditoriaAdd() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  // --- Form state (todos los campos importantes del backend) ---
+  // --- Form state (usando nombres EXACTOS del modelo) ---
   const [form, setForm] = useState({
     customer_status: "",
 
@@ -121,53 +115,57 @@ export default function TecnicoAuditoriaAdd() {
     arrival_within_slot: "",
     identification_shown: "",
     explained_before_start: "",
-    arrival_comments: "",
+    llegada_comentarios: "",
 
     // Agendamiento informado al cliente
     schedule_informed_datetime: "",
     schedule_informed_adult_required: "",
     schedule_informed_services: "",
-    schedule_comments: "",
+    agend_comentarios: "",
 
     // Instalación
     asked_equipment_location: "",
     tidy_and_safe_install: "",
     tidy_cabling: "",
     verified_signal_levels: "",
-    install_process_comments: "",
+    proceso_comentarios: "",
 
     // Configuración y pruebas
     configured_router: "",
     tested_device: "",
     tv_functioning: "",
     left_instructions: "",
-    config_comments: "",
+    config_comentarios: "",
 
     // Cierre
     reviewed_with_client: "",
     got_consent_signature: "",
     left_contact_info: "",
-    closure_comments: "",
+    cierre_comentarios: "",
 
     // Percepción / NPS
-    perception_notes: "",
-    nps_process: "",
-    nps_technician: "",
-    nps_brand: "",
+    percepcion: "",
+    nps_proceso: "",
+    nps_tecnico: "",
+    nps_claro_vtr: "",
 
     // Diagnóstico / resolución / info
     ont_modem_ok: "",
-    internet_issue_category: "",
-    internet_issue_other: "",
-    tv_issue_category: "",
-    tv_issue_other: "",
-    other_issue_description: "",
-    resolution: "",
-    order_type: "",
-    info_type: "",
-    malpractice_company_detail: "",
-    malpractice_installer_detail: "",
-    final_problem_description: "",
+    service_issues: "",          // si usas checkboxes podría ser array; aquí mantenemos string o JSON según tu front
+    internet_categoria: "",
+    internet_otro: "",
+    tv_categoria: "",
+    tv_otro: "",
+    otro_descripcion: "",
+    solucion_gestion: "",
+    orden_tipo: "",
+    info_tipo: "",
+    detalle_mala_practica_empresa: "",
+    detalle_mala_practica_instalador: "",
+    descripcion_problema: "",
+
+    // Solo HFC
+    desc_hfc: "",
 
     // Fotos
     photo1: null,
@@ -197,7 +195,7 @@ export default function TecnicoAuditoriaAdd() {
     })();
   }, [id, navigate]);
 
-  // --- Mantener scroll al cambiar selects / inputs ---
+  // --- Mantener scroll al cambiar selects / inputs pesados ---
   function usePreventJumpOnHeavyControls() {
     useLayoutEffect(() => {
       let lastY = 0;
@@ -212,29 +210,24 @@ export default function TecnicoAuditoriaAdd() {
         });
       };
 
-      // Solo interceptamos cambios en SELECT y FILE (los que suelen re-renderizar pesado)
       const onChangeCapture = (e) => {
         const el = e.target;
         const tag = el?.tagName;
         const type = el?.type;
         if (tag === "SELECT" || type === "file") {
           saveY();
-          // restauramos en el próximo frame, cuando React ya pintó
           restoreY();
         }
       };
 
-      // Importante: no escuchamos input/keydown/focusout -> no tocamos textareas
       document.addEventListener("change", onChangeCapture, true);
-
       return () => {
         document.removeEventListener("change", onChangeCapture, true);
         if (raf) cancelAnimationFrame(raf);
       };
     }, []);
   }
-   
-  usePreventJumpOnHeavyControls()
+  usePreventJumpOnHeavyControls();
 
   // UI helpers
   const onChange = (e) => {
@@ -270,9 +263,11 @@ export default function TecnicoAuditoriaAdd() {
     setError("");
     if (!id) { setError("Asignación no cargada."); return; }
 
+    const msg = validate();
+    if (msg) { setError(msg); return; }
+
     try {
       setSaving(true);
-      // Asegura cookies/CSRF si usas sesión
       await api.get("/auth/csrf").catch(() => {});
 
       // 1) Yo
@@ -280,80 +275,82 @@ export default function TecnicoAuditoriaAdd() {
       // 2) Asignación
       let asig = (await api.get(`/api/asignaciones/${id}/`)).data;
 
-      // 3) Si no es mía, me la asigno
+      // 3) Si no es mía, error
       if (asig.asignado_a !== me.id) {
         throw new Error("No se pudo tomar la asignación.");
-        
       }
 
-      // 4) Construyo el payload permitido para /api/auditorias/
-      // Usa nombres y tipos EXACTOS del schema:
-      // - asignacion (int) [requerido]
-      // - customer_status (opcional): AUTORIZA | SIN_MORADORES | RECHAZA | CONTINGENCIA | MASIVO | REAGENDA
-      // - reschedule_date (YYYY-MM-DD) y reschedule_slot (10-13|14-18) si customer_status=REAGENDA
-      // - photo1/2/3 (files) opcionales, etc.
+      // 4) Payload: usar NOMBRES DEL MODELO
       const fd = new FormData();
       fd.append("asignacion", parseInt(id, 10));
 
-      if (form.customer_status) fd.append("customer_status", form.customer_status);          // p.ej. "AUTORIZA"
-      if (form.reschedule_date) fd.append("reschedule_date", form.reschedule_date);          // "2025-10-28"
-      if (form.reschedule_slot) fd.append("reschedule_slot", form.reschedule_slot);          // "10-13" | "14-18"
+      if (form.customer_status) fd.append("customer_status", form.customer_status);
+      if (form.reschedule_date) fd.append("reschedule_date", form.reschedule_date);
+      if (form.reschedule_slot) fd.append("reschedule_slot", form.reschedule_slot);
 
-      if (form.ont_modem_ok) fd.append("ont_modem_ok", String(form.ont_modem_ok));          // 1|2|3
-      if (form.service_issues) fd.append("service_issues", form.service_issues);
-      if (form.internet_issue_category) fd.append("internet_issue_category", form.internet_issue_category);
-      if (form.internet_issue_other) fd.append("internet_issue_other", form.internet_issue_other);
-      if (form.tv_issue_category) fd.append("tv_issue_category", form.tv_issue_category);
-      if (form.tv_issue_other) fd.append("tv_issue_other", form.tv_issue_other);
-      if (form.other_issue_description) fd.append("other_issue_description", form.other_issue_description);
+      if (form.ont_modem_ok !== "") fd.append("ont_modem_ok", String(form.ont_modem_ok));
+
+      // service_issues: si en tu front realmente es un array, usa JSON.stringify
+      if (Array.isArray(form.service_issues)) {
+        fd.append("service_issues", JSON.stringify(form.service_issues));
+      } else if (form.service_issues) {
+        fd.append("service_issues", form.service_issues);
+      }
+
+      if (form.internet_categoria) fd.append("internet_categoria", form.internet_categoria);
+      if (form.internet_otro) fd.append("internet_otro", form.internet_otro);
+      if (form.tv_categoria) fd.append("tv_categoria", form.tv_categoria);
+      if (form.tv_otro) fd.append("tv_otro", form.tv_otro);
+      if (form.otro_descripcion) fd.append("otro_descripcion", form.otro_descripcion);
 
       if (form.photo1) fd.append("photo1", form.photo1);
       if (form.photo2) fd.append("photo2", form.photo2);
       if (form.photo3) fd.append("photo3", form.photo3);
 
-      if (form.hfc_problem_description) fd.append("hfc_problem_description", form.hfc_problem_description);
+      if (form.desc_hfc) fd.append("desc_hfc", form.desc_hfc);
 
-      if (form.schedule_informed_datetime) fd.append("schedule_informed_datetime", String(form.schedule_informed_datetime)); // 1|2|3
-      if (form.schedule_informed_adult_required) fd.append("schedule_informed_adult_required", String(form.schedule_informed_adult_required));
-      if (form.schedule_informed_services) fd.append("schedule_informed_services", String(form.schedule_informed_services));
-      if (form.schedule_comments) fd.append("schedule_comments", form.schedule_comments);
+      if (form.schedule_informed_datetime !== "") fd.append("schedule_informed_datetime", String(form.schedule_informed_datetime));
+      if (form.schedule_informed_adult_required !== "") fd.append("schedule_informed_adult_required", String(form.schedule_informed_adult_required));
+      if (form.schedule_informed_services !== "") fd.append("schedule_informed_services", String(form.schedule_informed_services));
+      if (form.agend_comentarios) fd.append("agend_comentarios", form.agend_comentarios);
 
-      if (form.arrival_within_slot) fd.append("arrival_within_slot", String(form.arrival_within_slot));
-      if (form.identification_shown) fd.append("identification_shown", String(form.identification_shown));
-      if (form.explained_before_start) fd.append("explained_before_start", String(form.explained_before_start));
-      if (form.arrival_comments) fd.append("arrival_comments", form.arrival_comments);
+      if (form.arrival_within_slot !== "") fd.append("arrival_within_slot", String(form.arrival_within_slot));
+      if (form.identification_shown !== "") fd.append("identification_shown", String(form.identification_shown));
+      if (form.explained_before_start !== "") fd.append("explained_before_start", String(form.explained_before_start));
+      if (form.llegada_comentarios) fd.append("llegada_comentarios", form.llegada_comentarios);
 
-      if (form.asked_equipment_location) fd.append("asked_equipment_location", String(form.asked_equipment_location));
-      if (form.tidy_and_safe_install) fd.append("tidy_and_safe_install", String(form.tidy_and_safe_install));
-      if (form.tidy_cabling) fd.append("tidy_cabling", String(form.tidy_cabling));
-      if (form.verified_signal_levels) fd.append("verified_signal_levels", String(form.verified_signal_levels));
-      if (form.install_process_comments) fd.append("install_process_comments", form.install_process_comments);
+      if (form.asked_equipment_location !== "") fd.append("asked_equipment_location", String(form.asked_equipment_location));
+      if (form.tidy_and_safe_install !== "") fd.append("tidy_and_safe_install", String(form.tidy_and_safe_install));
+      if (form.tidy_cabling !== "") fd.append("tidy_cabling", String(form.tidy_cabling));
+      if (form.verified_signal_levels !== "") fd.append("verified_signal_levels", String(form.verified_signal_levels));
+      if (form.proceso_comentarios) fd.append("proceso_comentarios", form.proceso_comentarios);
 
-      if (form.configured_router) fd.append("configured_router", String(form.configured_router));
-      if (form.tested_device) fd.append("tested_device", String(form.tested_device));
-      if (form.tv_functioning) fd.append("tv_functioning", String(form.tv_functioning));
-      if (form.left_instructions) fd.append("left_instructions", String(form.left_instructions));
-      if (form.config_comments) fd.append("config_comments", form.config_comments);
+      if (form.configured_router !== "") fd.append("configured_router", String(form.configured_router));
+      if (form.tested_device !== "") fd.append("tested_device", String(form.tested_device));
+      if (form.tv_functioning !== "") fd.append("tv_functioning", String(form.tv_functioning));
+      if (form.left_instructions !== "") fd.append("left_instructions", String(form.left_instructions));
+      if (form.config_comentarios) fd.append("config_comentarios", form.config_comentarios);
 
-      if (form.reviewed_with_client) fd.append("reviewed_with_client", String(form.reviewed_with_client));
-      if (form.got_consent_signature) fd.append("got_consent_signature", String(form.got_consent_signature));
-      if (form.left_contact_info) fd.append("left_contact_info", String(form.left_contact_info));
-      if (form.closure_comments) fd.append("closure_comments", form.closure_comments);
-      if (form.perception_notes) fd.append("perception_notes", form.perception_notes);
+      if (form.reviewed_with_client !== "") fd.append("reviewed_with_client", String(form.reviewed_with_client));
+      if (form.got_consent_signature !== "") fd.append("got_consent_signature", String(form.got_consent_signature));
+      if (form.left_contact_info !== "") fd.append("left_contact_info", String(form.left_contact_info));
+      if (form.cierre_comentarios) fd.append("cierre_comentarios", form.cierre_comentarios);
 
-      if (form.nps_process != null) fd.append("nps_process", String(form.nps_process));
-      if (form.nps_technician != null) fd.append("nps_technician", String(form.nps_technician));
-      if (form.nps_brand != null) fd.append("nps_brand", String(form.nps_brand));
+      if (form.percepcion) fd.append("percepcion", form.percepcion);
 
-      if (form.resolution) fd.append("resolution", form.resolution);     // "terreno" | "orden"
-      if (form.order_type) fd.append("order_type", form.order_type);     // "tecnica" | "comercial"
-      if (form.info_type) fd.append("info_type", form.info_type);        // "mala_practica" | "problema_general"
-      if (form.malpractice_company_detail) fd.append("malpractice_company_detail", form.malpractice_company_detail);
-      if (form.malpractice_installer_detail) fd.append("malpractice_installer_detail", form.malpractice_installer_detail);
-      if (form.final_problem_description) fd.append("final_problem_description", form.final_problem_description);
+      if (form.nps_proceso !== "") fd.append("nps_proceso", String(form.nps_proceso));
+      if (form.nps_tecnico !== "") fd.append("nps_tecnico", String(form.nps_tecnico));
+      if (form.nps_claro_vtr !== "") fd.append("nps_claro_vtr", String(form.nps_claro_vtr));
+
+      if (form.solucion_gestion) fd.append("solucion_gestion", form.solucion_gestion);
+      if (form.orden_tipo) fd.append("orden_tipo", form.orden_tipo);
+      if (form.info_tipo) fd.append("info_tipo", form.info_tipo);
+      if (form.detalle_mala_practica_empresa) fd.append("detalle_mala_practica_empresa", form.detalle_mala_practica_empresa);
+      if (form.detalle_mala_practica_instalador) fd.append("detalle_mala_practica_instalador", form.detalle_mala_practica_instalador);
+      if (form.descripcion_problema) fd.append("descripcion_problema", form.descripcion_problema);
 
       // 5) Crear auditoría
-      await api.post("/api/auditorias/", fd); // 201 esperado
+      await api.post("/api/auditorias/", fd); // 201
       await api.patch(`/api/asignaciones/${id}/`, { estado: "VISITADA" });
 
       // 6) Redirigir
@@ -364,16 +361,20 @@ export default function TecnicoAuditoriaAdd() {
     } catch (err) {
       console.error("POST auditoría:", err?.response?.status, err?.response?.data);
       const data = err?.response?.data || {};
-      const msg = typeof data === "string" ? data : data.detail || data.error || "No se pudo registrar la auditoría.";
-      setError(msg);
+      const msg =
+        typeof data === "string"
+          ? data
+          : data.detail ||
+            data.error ||
+            (Array.isArray(data.non_field_errors) ? data.non_field_errors.join(" ") : "") ||
+            "No se pudo registrar la auditoría.";
+      setError(msg || "No se pudo registrar la auditoría.");
     } finally {
       setSaving(false);
     }
   };
 
-
-
-  // --- UI: pequeñas sub-secciones para ordenar el formulario ---
+  // --- UI: contenedor secciones ---
   const Section = ({ title, children }) => (
     <section style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, marginBottom: 12 }}>
       <div className={styles.helper} style={{ fontWeight: 700, marginBottom: 8 }}>{title}</div>
@@ -460,227 +461,509 @@ export default function TecnicoAuditoriaAdd() {
               <Section title="Agendamiento informado al cliente">
                 <label className={styles.label}>
                   Informó fecha/hora
-                  <select className={styles.select} name="schedule_informed_datetime" value={form.schedule_informed_datetime} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="schedule_informed_datetime"
+                    value={form.schedule_informed_datetime}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`sidt-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Informó adulto responsable
-                  <select className={styles.select} name="schedule_informed_adult_required" value={form.schedule_informed_adult_required} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="schedule_informed_adult_required"
+                    value={form.schedule_informed_adult_required}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`sadr-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Informó servicios a instalar
-                  <select className={styles.select} name="schedule_informed_services" value={form.schedule_informed_services} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="schedule_informed_services"
+                    value={form.schedule_informed_services}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`sise-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Comentarios de agendamiento
-                  <textarea className={styles.textarea} name="schedule_comments" value={form.schedule_comments} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChange} disabled={saving} />
+                  <textarea
+                    className={styles.textarea}
+                    name="agend_comentarios"
+                    value={form.agend_comentarios}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChange}
+                    disabled={saving}
+                  />
                 </label>
               </Section>
 
               <Section title="Llegada">
                 <label className={styles.label}>
                   Llegó dentro del bloque
-                  <select className={styles.select} name="arrival_within_slot" value={form.arrival_within_slot} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="arrival_within_slot"
+                    value={form.arrival_within_slot}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`aws-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Mostró identificación
-                  <select className={styles.select} name="identification_shown" value={form.identification_shown} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="identification_shown"
+                    value={form.identification_shown}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`ids-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Explicó antes de iniciar
-                  <select className={styles.select} name="explained_before_start" value={form.explained_before_start} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="explained_before_start"
+                    value={form.explained_before_start}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`ebs-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Comentarios de llegada
-                  <textarea className={styles.textarea} name="arrival_comments" value={form.arrival_comments} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChange} disabled={saving} />
+                  <textarea
+                    className={styles.textarea}
+                    name="llegada_comentarios"
+                    value={form.llegada_comentarios}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChange}
+                    disabled={saving}
+                  />
                 </label>
               </Section>
 
               <Section title="Instalación">
                 <label className={styles.label}>
                   Preguntó ubicación de equipos
-                  <select className={styles.select} name="asked_equipment_location" value={form.asked_equipment_location} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="asked_equipment_location"
+                    value={form.asked_equipment_location}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`ael-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Orden y seguridad en instalación
-                  <select className={styles.select} name="tidy_and_safe_install" value={form.tidy_and_safe_install} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="tidy_and_safe_install"
+                    value={form.tidy_and_safe_install}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`tasi-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Cableado ordenado
-                  <select className={styles.select} name="tidy_cabling" value={form.tidy_cabling} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="tidy_cabling"
+                    value={form.tidy_cabling}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`tc-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Niveles de señal verificados
-                  <select className={styles.select} name="verified_signal_levels" value={form.verified_signal_levels} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="verified_signal_levels"
+                    value={form.verified_signal_levels}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`vsl-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Comentarios del proceso
-                  <textarea className={styles.textarea} name="install_process_comments" value={form.install_process_comments} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChange} disabled={saving} />
+                  <textarea
+                    className={styles.textarea}
+                    name="proceso_comentarios"
+                    value={form.proceso_comentarios}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChange}
+                    disabled={saving}
+                  />
                 </label>
               </Section>
 
               <Section title="Configuración y pruebas">
                 <label className={styles.label}>
                   Router configurado
-                  <select className={styles.select} name="configured_router" value={form.configured_router} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="configured_router"
+                    value={form.configured_router}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`cr-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Dispositivo probado
-                  <select className={styles.select} name="tested_device" value={form.tested_device} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="tested_device"
+                    value={form.tested_device}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`td-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   TV funcionando
-                  <select className={styles.select} name="tv_functioning" value={form.tv_functioning} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="tv_functioning"
+                    value={form.tv_functioning}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`tvf-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Dejó instructivo
-                  <select className={styles.select} name="left_instructions" value={form.left_instructions} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="left_instructions"
+                    value={form.left_instructions}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`li-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Comentarios de configuración
-                  <textarea className={styles.textarea} name="config_comments" value={form.config_comments} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChange} disabled={saving} />
+                  <textarea
+                    className={styles.textarea}
+                    name="config_comentarios"
+                    value={form.config_comentarios}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChange}
+                    disabled={saving}
+                  />
                 </label>
               </Section>
 
               <Section title="Cierre">
                 <label className={styles.label}>
                   Revisó con el cliente
-                  <select className={styles.select} name="reviewed_with_client" value={form.reviewed_with_client} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="reviewed_with_client"
+                    value={form.reviewed_with_client}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`rwc-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Obtuvo firma de consentimiento
-                  <select className={styles.select} name="got_consent_signature" value={form.got_consent_signature} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="got_consent_signature"
+                    value={form.got_consent_signature}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`gcs-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Dejó info de contacto
-                  <select className={styles.select} name="left_contact_info" value={form.left_contact_info} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="left_contact_info"
+                    value={form.left_contact_info}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`lci-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Comentarios de cierre
-                  <textarea className={styles.textarea} name="closure_comments" value={form.closure_comments} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChange} disabled={saving} />
+                  <textarea
+                    className={styles.textarea}
+                    name="cierre_comentarios"
+                    value={form.cierre_comentarios}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChange}
+                    disabled={saving}
+                  />
                 </label>
               </Section>
 
               <Section title="Percepción / NPS">
                 <label className={styles.label}>
                   Notas de percepción
-                  <textarea className={styles.textarea} name="perception_notes" value={form.perception_notes} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChange} disabled={saving} />
+                  <textarea
+                    className={styles.textarea}
+                    name="percepcion"
+                    value={form.percepcion}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChange}
+                    disabled={saving}
+                  />
                 </label>
                 <label className={styles.label}>
                   NPS Proceso
-                  <input className={styles.input} name="nps_process" type="number" min="0" max="10" value={form.nps_process} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChangeNumber} disabled={saving} />
+                  <input
+                    className={styles.input}
+                    name="nps_proceso"
+                    type="number"
+                    min="0"
+                    max="10"
+                    value={form.nps_proceso}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  />
                 </label>
                 <label className={styles.label}>
                   NPS Técnico
-                  <input className={styles.input} name="nps_technician" type="number" min="0" max="10" value={form.nps_technician} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChangeNumber} disabled={saving} />
+                  <input
+                    className={styles.input}
+                    name="nps_tecnico"
+                    type="number"
+                    min="0"
+                    max="10"
+                    value={form.nps_tecnico}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  />
                 </label>
                 <label className={styles.label}>
                   NPS Marca
-                  <input className={styles.input} name="nps_brand" type="number" min="0" max="10" value={form.nps_brand} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChangeNumber} disabled={saving} />
+                  <input
+                    className={styles.input}
+                    name="nps_claro_vtr"
+                    type="number"
+                    min="0"
+                    max="10"
+                    value={form.nps_claro_vtr}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  />
                 </label>
               </Section>
 
               <Section title="Diagnóstico y resolución">
                 <label className={styles.label}>
                   ONT/Modem OK
-                  <select className={styles.select} name="ont_modem_ok" value={form.ont_modem_ok} onChange={onChangeNumber} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="ont_modem_ok"
+                    value={form.ont_modem_ok}
+                    onChange={onChangeNumber}
+                    disabled={saving}
+                  >
                     {SI_NO_NA.map((o) => <option key={`omo-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
 
                 <label className={styles.label}>
                   Problema Internet
-                  <select className={styles.select} name="internet_issue_category" value={form.internet_issue_category} onChange={onChange} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="internet_categoria"
+                    value={form.internet_categoria}
+                    onChange={onChange}
+                    disabled={saving}
+                  >
                     {INTERNET_ISSUE_CATEGORY.map((o) => <option key={`iic-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   Internet (otro)
-                  <input className={styles.input} name="internet_issue_other" value={form.internet_issue_other} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChange} disabled={saving} />
+                  <input
+                    className={styles.input}
+                    name="internet_otro"
+                    value={form.internet_otro}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChange}
+                    disabled={saving}
+                  />
                 </label>
 
                 <label className={styles.label}>
                   Problema TV
-                  <select className={styles.select} name="tv_issue_category" value={form.tv_issue_category} onChange={onChange} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="tv_categoria"
+                    value={form.tv_categoria}
+                    onChange={onChange}
+                    disabled={saving}
+                  >
                     {TV_ISSUE_CATEGORY.map((o) => <option key={`tvic-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
                 <label className={styles.label}>
                   TV (otro)
-                  <input className={styles.input} name="tv_issue_other" value={form.tv_issue_other} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChange} disabled={saving} />
+                  <input
+                    className={styles.input}
+                    name="tv_otro"
+                    value={form.tv_otro}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChange}
+                    disabled={saving}
+                  />
                 </label>
 
                 <label className={styles.label}>
                   Otro problema (descripción)
-                  <textarea className={styles.textarea} name="other_issue_description" value={form.other_issue_description} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChange} disabled={saving} />
+                  <textarea
+                    className={styles.textarea}
+                    name="otro_descripcion"
+                    value={form.otro_descripcion}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChange}
+                    disabled={saving}
+                  />
                 </label>
 
                 <label className={styles.label}>
                   Resolución
-                  <select className={styles.select} name="resolution" value={form.resolution} onChange={onChange} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="solucion_gestion"
+                    value={form.solucion_gestion}
+                    onChange={onChange}
+                    disabled={saving}
+                  >
                     {RESOLUTION.map((o) => <option key={`res-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
 
                 <label className={styles.label}>
                   Tipo de orden
-                  <select className={styles.select} name="order_type" value={form.order_type} onChange={onChange} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="orden_tipo"
+                    value={form.orden_tipo}
+                    onChange={onChange}
+                    disabled={saving}
+                  >
                     {ORDER_TYPE.map((o) => <option key={`ot-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
 
                 <label className={styles.label}>
                   Tipo de información
-                  <select className={styles.select} name="info_type" value={form.info_type} onChange={onChange} disabled={saving}>
+                  <select
+                    className={styles.select}
+                    name="info_tipo"
+                    value={form.info_tipo}
+                    onChange={onChange}
+                    disabled={saving}
+                  >
                     {INFO_TYPE.map((o) => <option key={`it-${o.value}`} value={o.value}>{o.label}</option>)}
                   </select>
                 </label>
 
                 <label className={styles.label}>
                   Detalle mala práctica (empresa)
-                  <input className={styles.input} name="malpractice_company_detail" value={form.malpractice_company_detail} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChange} disabled={saving} />
+                  <input
+                    className={styles.input}
+                    name="detalle_mala_practica_empresa"
+                    value={form.detalle_mala_practica_empresa}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChange}
+                    disabled={saving}
+                  />
                 </label>
                 <label className={styles.label}>
                   Detalle mala práctica (instalador)
-                  <input className={styles.input} name="malpractice_installer_detail" value={form.malpractice_installer_detail} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChange} disabled={saving} />
+                  <input
+                    className={styles.input}
+                    name="detalle_mala_practica_instalador"
+                    value={form.detalle_mala_practica_instalador}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChange}
+                    disabled={saving}
+                  />
                 </label>
 
                 <label className={styles.label}>
                   Descripción final del problema
-                  <textarea className={styles.textarea} name="final_problem_description" value={form.final_problem_description} onInputCapture={(e) => e.stopPropagation()} onKeyDownCapture={(e) => e.stopPropagation()} onChange={onChange} disabled={saving} />
+                  <textarea
+                    className={styles.textarea}
+                    name="descripcion_problema"
+                    value={form.descripcion_problema}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChange}
+                    disabled={saving}
+                  />
+                </label>
+              </Section>
+
+              <Section title="Solo HFC">
+                <label className={styles.label}>
+                  Detalle HFC
+                  <textarea
+                    className={styles.textarea}
+                    name="desc_hfc"
+                    value={form.desc_hfc}
+                    onInputCapture={(e) => e.stopPropagation()}
+                    onKeyDownCapture={(e) => e.stopPropagation()}
+                    onChange={onChange}
+                    disabled={saving}
+                  />
                 </label>
               </Section>
 
@@ -703,7 +986,13 @@ export default function TecnicoAuditoriaAdd() {
                 <button type="submit" className={styles.button} disabled={saving}>
                   {saving ? "Guardando…" : "Guardar auditoría"}
                 </button>
-                <button type="button" className={styles.button} style={{ background: "#6b7280" }} onClick={() => navigate(-1)} disabled={saving}>
+                <button
+                  type="button"
+                  className={styles.button}
+                  style={{ background: "#6b7280" }}
+                  onClick={() => navigate(-1)}
+                  disabled={saving}
+                >
                   Volver
                 </button>
               </div>

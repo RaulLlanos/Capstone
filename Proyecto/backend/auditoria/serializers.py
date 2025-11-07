@@ -1,7 +1,7 @@
-# auditoria/serializers.py
 from django.utils import timezone
 from rest_framework import serializers
 from .models import AuditoriaVisita
+
 
 class AuditoriaVisitaSerializer(serializers.ModelSerializer):
     # ---- Derivados de la asignación (solo lectura, no rompen el contrato) ----
@@ -10,58 +10,73 @@ class AuditoriaVisitaSerializer(serializers.ModelSerializer):
     direccion = serializers.CharField(source="asignacion.direccion", read_only=True)
     comuna = serializers.CharField(source="asignacion.comuna", read_only=True)
     fecha = serializers.DateField(source="asignacion.fecha", read_only=True)
-    # El front históricamente mostró el bloque desde reagendado_bloque
     bloque = serializers.CharField(source="asignacion.reagendado_bloque", read_only=True)
     tecnico_id = serializers.IntegerField(source="asignacion.asignado_a_id", read_only=True)
 
     class Meta:
         model = AuditoriaVisita
-        # ⚠️ Mantener estos nombres tal cual (compatibilidad con el frontend)
         fields = [
             "id", "created_at",
             "asignacion", "tecnico", "customer_status",
-            "reschedule_date", "reschedule_slot",
-            "ont_modem_ok",
 
-            # Problema/servicios
-            "service_issues", "internet_issue_category", "internet_issue_other",
-            "tv_issue_category", "tv_issue_other", "other_issue_description",
+            # Reagenda
+            "reschedule_date", "reschedule_slot",
+
+            # Diagnóstico / servicios
+            "ont_modem_ok", "service_issues",
+            "internet_categoria", "internet_otro",
+            "tv_categoria", "tv_otro",
+            "otro_descripcion",
 
             # Evidencias
             "photo1", "photo2", "photo3",
 
             # Solo HFC
-            "hfc_problem_description",
+            "desc_hfc",
 
-            # AGENDAMIENTO
-            "schedule_informed_datetime", "schedule_informed_adult_required",
-            "schedule_informed_services", "schedule_comments",
+            # Agendamiento
+            "schedule_informed_datetime",
+            "schedule_informed_adult_required",
+            "schedule_informed_services",
+            "agend_comentarios",
 
             # Llegada
-            "arrival_within_slot", "identification_shown", "explained_before_start", "arrival_comments",
+            "arrival_within_slot",
+            "identification_shown",
+            "explained_before_start",
+            "llegada_comentarios",
 
             # Proceso instalación
-            "asked_equipment_location", "tidy_and_safe_install", "tidy_cabling",
-            "verified_signal_levels", "install_process_comments",
+            "asked_equipment_location",
+            "tidy_and_safe_install",
+            "tidy_cabling",
+            "verified_signal_levels",
+            "proceso_comentarios",
 
             # Configuración y pruebas
-            "configured_router", "tested_device", "tv_functioning",
-            "left_instructions", "config_comments",
+            "configured_router",
+            "tested_device",
+            "tv_functioning",
+            "left_instructions",
+            "config_comentarios",
 
             # Cierre
-            "reviewed_with_client", "got_consent_signature", "left_contact_info", "closure_comments",
+            "reviewed_with_client",
+            "got_consent_signature",
+            "left_contact_info",
+            "cierre_comentarios",
 
             # Percepción / NPS
-            "perception_notes", "nps_process", "nps_technician", "nps_brand",
+            "percepcion", "nps_proceso", "nps_tecnico", "nps_claro_vtr",
 
-            # Gestión
-            "resolution", "order_type", "info_type",
-            "malpractice_company_detail", "malpractice_installer_detail",
+            # Solución / gestión / info
+            "solucion_gestion", "orden_tipo", "info_tipo",
+            "detalle_mala_practica_empresa", "detalle_mala_practica_instalador",
 
             # Final
-            "final_problem_description",
+            "descripcion_problema",
 
-            # Derivados de asignación (solo lectura)
+            # Derivados (solo lectura)
             "marca", "tecnologia", "direccion", "comuna", "fecha", "bloque", "tecnico_id",
         ]
         read_only_fields = [
@@ -69,9 +84,8 @@ class AuditoriaVisitaSerializer(serializers.ModelSerializer):
             "marca", "tecnologia", "direccion", "comuna", "fecha", "bloque", "tecnico_id",
         ]
 
-    # -------- Validaciones de negocio sin cambiar nombres que usa el front --------
+    # -------- Validaciones de negocio --------
     def validate(self, attrs):
-        # Si es REAGENDA, exige fecha/bloque válidos y que la fecha no sea pasada
         status_val = attrs.get("customer_status") or getattr(self.instance, "customer_status", None)
         if status_val == "REAGENDA":
             f = attrs.get("reschedule_date") or getattr(self.instance, "reschedule_date", None)
@@ -83,7 +97,6 @@ class AuditoriaVisitaSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        # Si el user es técnico, solo puede crear auditorías de sus asignaciones
         request = self.context.get("request")
         u = getattr(request, "user", None)
         if u and getattr(u, "rol", None) == "tecnico":
@@ -93,5 +106,4 @@ class AuditoriaVisitaSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
-        # Edición permitida; los side-effects viven en señales (al crear) o en vistas dedicadas.
         return super().update(instance, validated_data)

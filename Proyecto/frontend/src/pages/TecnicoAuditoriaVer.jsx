@@ -79,13 +79,16 @@ function ymdToDmy(s) {
 // ---------- Carga auditoría por asignación ----------
 async function findAuditByAsignacion(asignacionId) {
   try {
-    const res = await api.get("/api/auditorias/", { params: { asignacion__asignado_a: undefined, search: undefined, asignacion: asignacionId } });
-    // Algunos backends no tienen "asignacion" como filtro directo en OpenAPI,
-    // pero en tu versión previa funcionaba. Si no, quita "asignacion" y trae todas,
-    // luego filtra en cliente por auditoria.asignacion === Number(asignacionId).
+    const res = await api.get("/api/auditorias/", {
+      params: { asignacion: asignacionId },
+    });
     const data = res.data;
-    const list = Array.isArray(data?.results) ? data.results : Array.isArray(data) ? data : [];
-    const exact = list.find(a => Number(a.asignacion) === Number(asignacionId));
+    const list = Array.isArray(data?.results)
+      ? data.results
+      : Array.isArray(data)
+      ? data
+      : [];
+    const exact = list.find((a) => Number(a.asignacion) === Number(asignacionId));
     return exact || list[0] || null;
   } catch {
     return null;
@@ -131,16 +134,25 @@ export default function TecnicoAuditoriaVer() {
   // Helpers de impresión
   const enum123 = (val) => asText(val, YES_NO_NA);
 
-  // Campos “texto directo” con mapeos específicos:
+  // ⚠️ Campos “texto directo” con mapeos específicos (usando nombres REALES de backend):
   const customerStatusText = asText(auditoria?.customer_status, CUSTOMER_STATUS_MAP);
-  const orderTypeText = asText(auditoria?.order_type, ORDER_TYPE_MAP);
-  const infoTypeText = asText(auditoria?.info_type, INFO_TYPE_MAP);
-  const resolutionText = asText(auditoria?.resolution, RESOLUTION_MAP);
+  const orderTypeText = asText(auditoria?.orden_tipo, ORDER_TYPE_MAP);
+  const infoTypeText = asText(auditoria?.info_tipo, INFO_TYPE_MAP);
+  const resolutionText = asText(auditoria?.solucion_gestion, RESOLUTION_MAP);
 
+  // Derivados/planificación
   const fechaProg = ymdToDmy(auditoria?.fecha || detalleAsignacion?.fecha);
-  const bloqueProg = asText(auditoria?.bloque || detalleAsignacion?.bloque, SLOT_MAP);
+  const bloqueProg = asText(
+    auditoria?.bloque || detalleAsignacion?.reagendado_bloque || detalleAsignacion?.bloque,
+    SLOT_MAP
+  );
   const reschedDate = ymdToDmy(auditoria?.reschedule_date);
   const reschedSlot = asText(auditoria?.reschedule_slot, SLOT_MAP);
+
+  // Formateos útiles
+  const serviceIssuesText = Array.isArray(auditoria?.service_issues)
+    ? auditoria.service_issues.join(", ")
+    : (auditoria?.service_issues || "—");
 
   return (
     <div className={styles.wrapper}>
@@ -177,12 +189,14 @@ export default function TecnicoAuditoriaVer() {
               </div>
 
               <Row label="Resultado (customer_status)">{customerStatusText}</Row>
-              <Row label="Reagendado para">{reschedDate} {reschedSlot !== "—" ? `· ${reschedSlot}` : ""}</Row>
+              <Row label="Reagendado para">
+                {reschedDate} {reschedSlot !== "—" ? `· ${reschedSlot}` : ""}
+              </Row>
 
               <Row label="Tipo de orden">{orderTypeText}</Row>
               <Row label="Tipo de info">{infoTypeText}</Row>
               <Row label="Resolución">{resolutionText}</Row>
-              <Row label="Descripción final">{auditoria?.final_problem_description || "—"}</Row>
+              <Row label="Descripción final">{auditoria?.descripcion_problema || "—"}</Row>
             </div>
 
             {/* Checklist (1/2/3 -> Sí/No/No Aplica) */}
@@ -194,12 +208,12 @@ export default function TecnicoAuditoriaVer() {
               <Row label="Se informó horario (fecha/hora)">{enum123(auditoria?.schedule_informed_datetime)}</Row>
               <Row label="Se informó que un adulto debía estar presente">{enum123(auditoria?.schedule_informed_adult_required)}</Row>
               <Row label="Se informaron los servicios a instalar">{enum123(auditoria?.schedule_informed_services)}</Row>
-              <Row label="Comentarios de agendamiento">{auditoria?.schedule_comments || "—"}</Row>
+              <Row label="Comentarios de agendamiento">{auditoria?.agend_comentarios || "—"}</Row>
 
               <Row label="Llegada dentro del bloque">{enum123(auditoria?.arrival_within_slot)}</Row>
               <Row label="Mostró identificación">{enum123(auditoria?.identification_shown)}</Row>
               <Row label="Explicó antes de iniciar">{enum123(auditoria?.explained_before_start)}</Row>
-              <Row label="Comentarios de llegada">{auditoria?.arrival_comments || "—"}</Row>
+              <Row label="Comentarios de llegada">{auditoria?.llegada_comentarios || "—"}</Row>
 
               <Row label="Preguntó ubicación de equipos">{enum123(auditoria?.asked_equipment_location)}</Row>
               <Row label="Instalación prolija y segura">{enum123(auditoria?.tidy_and_safe_install)}</Row>
@@ -211,14 +225,14 @@ export default function TecnicoAuditoriaVer() {
               <Row label="Probó con dispositivo">{enum123(auditoria?.tested_device)}</Row>
               <Row label="TV funcionando">{enum123(auditoria?.tv_functioning)}</Row>
               <Row label="Dejó instrucciones">{enum123(auditoria?.left_instructions)}</Row>
-              <Row label="Comentarios de configuración">{auditoria?.config_comments || "—"}</Row>
+              <Row label="Comentarios de configuración">{auditoria?.config_comentarios || "—"}</Row>
 
               <Row label="Revisó trabajo con el cliente">{enum123(auditoria?.reviewed_with_client)}</Row>
               <Row label="Obtuvo firma de consentimiento">{enum123(auditoria?.got_consent_signature)}</Row>
               <Row label="Dejó info de contacto">{enum123(auditoria?.left_contact_info)}</Row>
-              <Row label="Cierre: comentarios">{auditoria?.closure_comments || "—"}</Row>
+              <Row label="Cierre: comentarios">{auditoria?.cierre_comentarios || "—"}</Row>
 
-              <Row label="Percepción del cliente">{auditoria?.perception_notes || "—"}</Row>
+              <Row label="Percepción del cliente">{auditoria?.percepcion || "—"}</Row>
             </div>
 
             {/* Problemas y observaciones */}
@@ -227,19 +241,19 @@ export default function TecnicoAuditoriaVer() {
                 Problemas reportados
               </div>
 
-              <Row label="Servicio(s) con problemas">{auditoria?.service_issues || "—"}</Row>
-              <Row label="Internet: categoría">{auditoria?.internet_issue_category || "—"}</Row>
-              <Row label="Internet: otro">{auditoria?.internet_issue_other || "—"}</Row>
-              <Row label="TV: categoría">{auditoria?.tv_issue_category || "—"}</Row>
-              <Row label="TV: otro">{auditoria?.tv_issue_other || "—"}</Row>
-              <Row label="Descripción otros problemas">{auditoria?.other_issue_description || "—"}</Row>
-              <Row label="Detalle problema HFC">{auditoria?.hfc_problem_description || "—"}</Row>
+              <Row label="Servicio(s) con problemas">{serviceIssuesText}</Row>
+              <Row label="Internet: categoría">{auditoria?.internet_categoria || "—"}</Row>
+              <Row label="Internet: otro">{auditoria?.internet_otro || "—"}</Row>
+              <Row label="TV: categoría">{auditoria?.tv_categoria || "—"}</Row>
+              <Row label="TV: otro">{auditoria?.tv_otro || "—"}</Row>
+              <Row label="Descripción otros problemas">{auditoria?.otro_descripcion || "—"}</Row>
+              <Row label="Detalle problema HFC">{auditoria?.desc_hfc || "—"}</Row>
 
               <Row label="Mala práctica (empresa)">
-                {auditoria?.malpractice_company_detail || "—"}
+                {auditoria?.detalle_mala_practica_empresa || "—"}
               </Row>
               <Row label="Mala práctica (instalador)">
-                {auditoria?.malpractice_installer_detail || "—"}
+                {auditoria?.detalle_mala_practica_instalador || "—"}
               </Row>
             </div>
 
