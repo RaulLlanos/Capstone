@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Optional
 
 from django.conf import settings
@@ -236,3 +237,20 @@ def enviar_notificacion_whatsapp(notif: Notificacion, *, to_msisdn: Optional[str
             _send_whatsapp_cloud(msisdn, _build_whatsapp_text(notif))
     except Exception:
         log.exception("Fallo en stub enviar_notificacion_whatsapp")
+
+
+# ---------------------------------------------------------------------------
+# Wrappers en background (no bloquean el request)
+# ---------------------------------------------------------------------------
+def enviar_notificacion_background(notif: Notificacion) -> None:
+    """Dispara enviar_notificacion_real en un thread (daemon)."""
+    threading.Thread(target=enviar_notificacion_real, args=(notif,), daemon=True).start()
+
+
+def enviar_notificacion_whatsapp_background(notif: Notificacion, *, to_msisdn: Optional[str] = None) -> None:
+    """Dispara enviar_notificacion_whatsapp en un thread (daemon)."""
+    threading.Thread(
+        target=enviar_notificacion_whatsapp,
+        kwargs={"notif": notif, "to_msisdn": to_msisdn},
+        daemon=True,
+    ).start()

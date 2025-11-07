@@ -1,4 +1,3 @@
-# backend/claro_project/settings.py
 from pathlib import Path
 import os
 from urllib.parse import urlparse, parse_qs

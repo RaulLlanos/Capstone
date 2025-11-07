@@ -27,3 +27,10 @@ Proyecto/gestion-tecnicos/.vite/
 # Permitir versionar migrations del backend
 !Proyecto/backend/**/migrations/
 !Proyecto/backend/**/migrations/*.py
+
+
+.env.*
+cookies.txt
+
+Proyecto/cookies.txt
+Proyecto/backend/cookies.txt

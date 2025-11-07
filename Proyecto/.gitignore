@@ -8,3 +8,7 @@ cookies.txt
 !backend/**/migrations/*.py
 
 # Permitir versionar migrations del backend
+.env
+.env.*
+backend/cookies.txt
+backend/.env
