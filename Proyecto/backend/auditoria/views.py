@@ -3,13 +3,12 @@ from django.db.models import Q
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets, permissions
 from rest_framework.filters import SearchFilter, OrderingFilter
-from rest_framework.permissions import IsAuthenticated  # ← import correcto
-from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.decorators import action
 
 from .models import AuditoriaVisita
 from .serializers import AuditoriaVisitaSerializer
-from usuarios.models import Usuario  # ← para el endpoint /tecnicos
 
 
 class IsAdminOrTechOwner(permissions.BasePermission):
@@ -44,8 +43,8 @@ class AuditoriaVisitaViewSet(viewsets.ModelViewSet):
 
     Filtros:
       - customer_status
-      - asignacion__asignado_a (id técnico)
-      - tecnico (id técnico directo en la auditoría)  ← alias añadido, por si el FE lo usa
+      - asignacion (id) / asignacion__asignado_a (id técnico asignado a la visita)
+      - tecnico (id) / tecnico_id (compat)
       - asignacion__comuna, asignacion__zona
       - created_at__gte / __lte
     """
@@ -58,78 +57,64 @@ class AuditoriaVisitaViewSet(viewsets.ModelViewSet):
     serializer_class = AuditoriaVisitaSerializer
     permission_classes = [IsAuthenticated, IsAdminOrTechOwner]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+
+    # Incluimos claves estándar y compatibilidad con *_id
     filterset_fields = {
         "customer_status": ["exact", "in"],
-        "asignacion__asignado_a": ["exact"],
-        "tecnico": ["exact"],                  # <—— NUEVO alias “a prueba de balas”
+        "asignacion": ["exact"],                  # ?asignacion=7
+        "asignacion__asignado_a": ["exact"],      # ?asignacion__asignado_a=29
+        "tecnico": ["exact"],                     # ?tecnico=29
+        "tecnico_id": ["exact"],                  # ?tecnico_id=29 (compat)
         "asignacion__comuna": ["exact"],
         "asignacion__zona": ["exact"],
         "created_at": ["gte", "lte"],
     }
     search_fields = ["asignacion__direccion", "asignacion__rut_cliente", "asignacion__comuna"]
-    ordering_fields = ["created_at", "asignacion__comuna", "asignacion__zona", "tecnico__first_name", "tecnico__last_name", "asignacion__asignado_a__first_name", "asignacion__asignado_a__last_name"]
+    ordering_fields = ["created_at", "asignacion__comuna", "asignacion__zona"]
 
     def get_queryset(self):
         u = self.request.user
         rol = getattr(u, "rol", None)
 
-        # Usa el queryset base (ya tiene select_related + order_by)
         qs = self.queryset
 
-        if rol == "administrador":
-            return qs
-
+        # Alcance por rol
         if rol == "tecnico":
-            return qs.filter(
+            qs = qs.filter(
                 Q(tecnico_id=u.id) |
                 Q(asignacion__asignado_a_id=u.id)
             )
 
-        return qs.none()
+        # --- Compatibilidad explícita con parámetros usados por el Front ---
+        # Aun teniendo DjangoFilterBackend, aplicamos estos filtros manuales
+        # para asegurar que ?asignacion=<id>&tecnico_id=<id> siempre funcionen.
+        asignacion_id = self.request.query_params.get("asignacion")
+        if asignacion_id:
+            qs = qs.filter(asignacion_id=asignacion_id)
 
-    # ---------------- helpers display name ----------------
-    @staticmethod
-    def _display_name(user: Usuario | None) -> str:
-        """
-        Devuelve 'Nombre Apellido' si existe; si no, local-part del email; si no, Tec#ID.
-        """
-        if not user:
-            return ""
-        fn = (user.first_name or "").strip()
-        ln = (user.last_name or "").strip()
-        full = f"{fn} {ln}".strip()
-        if full:
-            return full
-        email = (user.email or "").strip()
-        if email:
-            local = email.split("@")[0]
-            if local:
-                return local
-        return f"Tec#{user.id}"
+        tecnico_id = self.request.query_params.get("tecnico_id")
+        if tecnico_id:
+            qs = qs.filter(tecnico_id=tecnico_id)
 
-    # ---------------- endpoint para poblar el combo de técnicos en FE ----------------
+        return qs
+
+    # Endpoint ADITIVO (no rompe APIs): lista de técnicos con nombre/email para combos
     @action(detail=False, methods=["get"], url_path="tecnicos")
     def tecnicos(self, request):
-        """
-        Devuelve los técnicos que aparecen en las auditorías (dueño directo o de la asignación),
-        con etiqueta 'label' ya formateada a prueba de vacíos.
-        """
-        ids_directos = (
-            AuditoriaVisita.objects
-            .filter(tecnico_id__isnull=False)
-            .values_list("tecnico_id", flat=True)
-            .distinct()
-        )
-        ids_asignaciones = (
-            AuditoriaVisita.objects
-            .filter(asignacion__asignado_a_id__isnull=False)
-            .values_list("asignacion__asignado_a_id", flat=True)
-            .distinct()
-        )
-        ids = set(ids_directos) | set(ids_asignaciones)
-        users = Usuario.objects.filter(id__in=ids).order_by("first_name", "last_name", "id")
-        data = [
-            {"id": u.id, "label": self._display_name(u), "email": u.email}
-            for u in users
-        ]
+        base = self.get_queryset().select_related("tecnico")
+        vals = (base.values(
+            "tecnico_id",
+            "tecnico__first_name",
+            "tecnico__last_name",
+            "tecnico__email",
+        ).distinct())
+        data = []
+        for v in vals:
+            tid = v["tecnico_id"]
+            if not tid:
+                continue
+            nombre = f"{(v['tecnico__first_name'] or '').strip()} {(v['tecnico__last_name'] or '').strip()}".strip()
+            label = nombre or (v["tecnico__email"] or f"Tec #{tid}")
+            data.append({"id": tid, "nombre": label, "email": v["tecnico__email"] or ""})
+        data.sort(key=lambda x: x["nombre"].lower())
         return Response(data)
