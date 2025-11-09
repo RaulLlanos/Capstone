@@ -30,6 +30,7 @@ urlpatterns = [
 
     # API REST
     path("api/", include(router.urls)),
+    path('app/', TemplateView.as_view(template_name='index.html'), name='spa'),
 
     # Auth (elige UNO de los dos enfoques; aquí dejo el explícito)
     # path("auth/", include("usuarios.auth_urls")),  # <- Si usas este, borra las rutas explícitas de abajo
