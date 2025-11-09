@@ -4,6 +4,27 @@ from rest_framework import serializers
 from .models import AuditoriaVisita
 
 
+def _display_name(user) -> str:
+    """
+    'Nombre Apellido' si existe; si no, local-part del email; si no, 'Tec#ID'.
+    A prueba de nulos.
+    """
+    if not user:
+        return ""
+    fn = (getattr(user, "first_name", "") or "").strip()
+    ln = (getattr(user, "last_name", "") or "").strip()
+    full = f"{fn} {ln}".strip()
+    if full:
+        return full
+    email = (getattr(user, "email", "") or "").strip()
+    if email:
+        local = email.split("@")[0]
+        if local:
+            return local
+    uid = getattr(user, "id", None)
+    return f"Tec#{uid}" if uid else ""
+
+
 class AuditoriaVisitaSerializer(serializers.ModelSerializer):
     # ---- Derivados de la asignación (solo lectura, no rompen el contrato) ----
     marca = serializers.CharField(source="asignacion.marca", read_only=True)
@@ -14,7 +35,7 @@ class AuditoriaVisitaSerializer(serializers.ModelSerializer):
     bloque = serializers.CharField(source="asignacion.reagendado_bloque", read_only=True)
     tecnico_id = serializers.IntegerField(source="asignacion.asignado_a_id", read_only=True)
 
-    # ---- NUEVO: nombres “a prueba de balas” (read-only) ----
+    # ---- NUEVO: nombres “a prueba de balas” para que el FE deje de mostrar Tec#ID ----
     tecnico_nombre = serializers.SerializerMethodField(read_only=True)
     asignacion_tecnico_nombre = serializers.SerializerMethodField(read_only=True)
 
@@ -84,7 +105,7 @@ class AuditoriaVisitaSerializer(serializers.ModelSerializer):
             # Derivados (solo lectura)
             "marca", "tecnologia", "direccion", "comuna", "fecha", "bloque", "tecnico_id",
 
-            # Nombres formateados (solo lectura)
+            # Nuevos (solo lectura) para nombres del técnico
             "tecnico_nombre", "asignacion_tecnico_nombre",
         ]
         read_only_fields = [
@@ -117,27 +138,14 @@ class AuditoriaVisitaSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         return super().update(instance, validated_data)
 
-    # -------- Helpers de display-name --------
-    @staticmethod
-    def _display_name(user) -> str:
-        if not user:
-            return ""
-        fn = (getattr(user, "first_name", "") or "").strip()
-        ln = (getattr(user, "last_name", "") or "").strip()
-        full = f"{fn} {ln}".strip()
-        if full:
-            return full
-        email = (getattr(user, "email", "") or "").strip()
-        if email:
-            local = email.split("@")[0]
-            if local:
-                return local
-        uid = getattr(user, "id", None)
-        return f"Tec#{uid}" if uid else ""
-
+    # -------- Getters de nombres robustos --------
     def get_tecnico_nombre(self, obj):
-        return self._display_name(getattr(obj, "tecnico", None))
+        # Prioridad: dueño directo de la auditoría (obj.tecnico) → si no, técnico asignado a la visita
+        if getattr(obj, "tecnico", None):
+            return _display_name(obj.tecnico)
+        asign = getattr(obj, "asignacion", None)
+        return _display_name(getattr(asign, "asignado_a", None)) if asign else ""
 
     def get_asignacion_tecnico_nombre(self, obj):
         asign = getattr(obj, "asignacion", None)
-        return self._display_name(getattr(asign, "asignado_a", None)) if asign else ""
+        return _display_name(getattr(asign, "asignado_a", None)) if asign else ""
