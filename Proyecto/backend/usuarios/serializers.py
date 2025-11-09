@@ -1,3 +1,4 @@
+# usuarios/serializers.py
 from rest_framework import serializers
 from .models import Usuario, UsuarioSistema
 
@@ -11,40 +12,67 @@ except Exception:
         return 8
 
 
+# ---------- helper único para nombres “bonitos” ----------
+def _display_name(obj) -> str:
+    if not obj:
+        return ""
+    fn = (getattr(obj, "first_name", "") or "").strip()
+    ln = (getattr(obj, "last_name", "") or "").strip()
+    full = f"{fn} {ln}".strip()
+    if full:
+        return full
+    email = (getattr(obj, "email", "") or "").strip()
+    if email:
+        local = email.split("@")[0]
+        if local:
+            return local
+    uid = getattr(obj, "id", None)
+    return f"Tec#{uid}" if uid else ""
+
+
 class UsuarioSistemaListSerializer(serializers.ModelSerializer):
     nombre = serializers.SerializerMethodField()
+    full_name = serializers.SerializerMethodField(read_only=True)  # extra, sin romper FE
 
     class Meta:
         model = UsuarioSistema
         fields = [
-            "id", "first_name", "last_name", "nombre",
+            "id", "first_name", "last_name", "nombre", "full_name",
             "email", "rol", "is_active", "date_joined",
         ]
 
     def get_nombre(self, obj):
-        full = f"{obj.first_name or ''} {obj.last_name or ''}".strip()
-        return full or obj.email
+        # Compatibilidad con FE actual
+        return _display_name(obj)
+
+    def get_full_name(self, obj):
+        # Campo explícito por si el FE prefiere usarlo
+        return _display_name(obj)
 
 
 class UsuarioListSerializer(serializers.ModelSerializer):
     """Fallback: listar directo desde la tabla usuarios."""
     nombre = serializers.SerializerMethodField()
+    full_name = serializers.SerializerMethodField(read_only=True)  # extra, sin romper FE
 
     class Meta:
         model = Usuario
         fields = [
-            "id", "first_name", "last_name", "nombre",
+            "id", "first_name", "last_name", "nombre", "full_name",
             "email", "rol", "is_active", "date_joined",
         ]
 
     def get_nombre(self, obj):
-        full = f"{obj.first_name or ''} {obj.last_name or ''}".strip()
-        return full or obj.email
+        return _display_name(obj)
+
+    def get_full_name(self, obj):
+        return _display_name(obj)
 
 
 class UsuarioSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False, allow_blank=False, min_length=1)
     rut = serializers.CharField(read_only=True)
+    full_name = serializers.SerializerMethodField(read_only=True)  # extra, sin romper FE
 
     class Meta:
         model = Usuario
@@ -54,8 +82,9 @@ class UsuarioSerializer(serializers.ModelSerializer):
             "rut_num", "dv", "rut",
             "is_active", "is_staff", "date_joined",
             "password",
+            "full_name",
         ]
-        read_only_fields = ["id", "date_joined", "is_staff"]
+        read_only_fields = ["id", "date_joined", "is_staff", "full_name"]
 
     # === Reglas de negocio ===
     def validate_email(self, value):
@@ -116,6 +145,9 @@ class UsuarioSerializer(serializers.ModelSerializer):
 
         instance.save()
         return instance
+
+    def get_full_name(self, obj: Usuario) -> str:
+        return _display_name(obj)
 
 
 # === Pequeño serializer para PUT /admin/usuarios/:id/rol ===
