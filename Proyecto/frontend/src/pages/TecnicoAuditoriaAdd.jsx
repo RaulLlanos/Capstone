@@ -13,7 +13,7 @@ const CUSTOMER_STATUS = [
   { value: "SIN_MORADORES", label: "Sin Moradores" },
   { value: "RECHAZA", label: "Rechaza" },
   { value: "CONTINGENCIA", label: "Contingencia" },
-  { value: "MASIVO", label: "Masivo" },
+  { value: "MASIVO", label: "Masivo" }
 ];
 
 const SI_NO_NA = [
