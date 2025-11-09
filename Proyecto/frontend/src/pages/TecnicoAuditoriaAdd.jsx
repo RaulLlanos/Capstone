@@ -14,7 +14,6 @@ const CUSTOMER_STATUS = [
   { value: "RECHAZA", label: "Rechaza" },
   { value: "CONTINGENCIA", label: "Contingencia" },
   { value: "MASIVO", label: "Masivo" },
-  { value: "REAGENDA", label: "Reagenda" },
 ];
 
 const SI_NO_NA = [
