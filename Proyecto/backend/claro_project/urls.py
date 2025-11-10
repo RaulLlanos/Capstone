@@ -13,10 +13,13 @@ from usuarios.views import UsuarioViewSet
 from asignaciones.views import DireccionAsignadaViewSet
 from auditoria.views import AuditoriaVisitaViewSet
 
+from core import views as core_views
+
 from usuarios.auth_views import (
     RegisterView, LoginView, RefreshCookieView,
     LogoutView, MeView, CsrfTokenView,
 )
+
 
 router = DefaultRouter()
 router.register(r"usuarios", UsuarioViewSet, basename="usuarios")
@@ -27,6 +30,8 @@ router.register(r"auditorias", AuditoriaVisitaViewSet, basename="auditorias")
 SpaView = method_decorator(ensure_csrf_cookie, name="dispatch")(TemplateView)
 
 urlpatterns = [
+    path("admin/auditorias/<int:pk>/", core_views.auditoria_detalle, name="auditoria_detalle"),
+    path("panel/auditorias/<int:pk>/", core_views.auditoria_detalle, name="auditoria_detalle_alias"),
     path("admin/", admin.site.urls),
 
     # API REST
@@ -48,6 +53,7 @@ urlpatterns = [
     # Cualquier ruta no api/admin/auth/static/media => index.html
     re_path(r"^(?!api/|admin/|auth/|static/|media/).*$",
             SpaView.as_view(template_name="index.html")),
+            
 ]
 
 if settings.DEBUG:

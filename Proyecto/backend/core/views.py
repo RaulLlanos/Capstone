@@ -4,6 +4,8 @@ from django.utils.html import escape
 from rest_framework import viewsets, permissions
 from core.models import Notificacion, LogSistema
 from core.serializers import NotificacionSerializer, LogSistemaSerializer
+from django.shortcuts import render, get_object_or_404
+from auditoria.models import AuditoriaVisita
 
 
 class NotificacionViewSet(viewsets.ModelViewSet):
@@ -76,3 +78,26 @@ def gracias(request):
 </html>
 """
     return HttpResponse(html, content_type="text/html; charset=utf-8")
+
+
+def auditoria_detalle(request, pk: int):
+    # 1) Intenta como id de auditoría
+    obj = AuditoriaVisita.objects.select_related("asignacion", "tecnico").filter(pk=pk).first()
+
+    # 2) Fallback: si no existe, interpreta pk como id de asignación y toma la última auditoría
+    if not obj:
+        obj = (
+            AuditoriaVisita.objects
+            .select_related("asignacion", "tecnico")
+            .filter(asignacion_id=pk)
+            .order_by("-created_at", "-id")
+            .first()
+        )
+
+    if not obj:
+        # Renderiza tu template con mensaje de error (tú ya tienes uno)
+        return render(request, "admin_auditorias/detalle.html", {
+            "error": "No se encontró auditoría para ese ID."
+        }, status=404)
+
+    return render(request, "admin_auditorias/detalle.html", {"a": obj})

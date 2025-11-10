@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Auditoría registrada</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body>
+  <h1>Auditoría registrada</h1>
+
+  {% if error %}
+    <p>{{ error }}</p>
+  {% else %}
+    <p><strong>ID auditoría:</strong> {{ a.id }}</p>
+    <p><strong>Asignación:</strong> {{ a.asignacion_id }}</p>
+    <p><strong>Técnico:</strong>
+      {% if a.tecnico %}
+        {{ a.tecnico.first_name }} {{ a.tecnico.last_name }} ({{ a.tecnico.email }})
+      {% else %}
+        —
+      {% endif %}
+    </p>
+    <p><strong>Estado:</strong> {{ a.customer_status }}</p>
+
+    {% if a.photo1 %}
+      <p><img src="{{ a.photo1.url }}" style="max-width: 320px;"></p>
+    {% endif %}
+    {% if a.photo2 %}
+      <p><img src="{{ a.photo2.url }}" style="max-width: 320px;"></p>
+    {% endif %}
+    {% if a.photo3 %}
+      <p><img src="{{ a.photo3.url }}" style="max-width: 320px;"></p>
+    {% endif %}
+  {% endif %}
+</body>
+</html>
