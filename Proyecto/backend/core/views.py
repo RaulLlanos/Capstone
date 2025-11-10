@@ -79,25 +79,32 @@ def gracias(request):
 """
     return HttpResponse(html, content_type="text/html; charset=utf-8")
 
+def _display_user(u):
+    if not u:
+        return "—"
+    name = f"{(u.first_name or '').strip()} {(u.last_name or '').strip()}".strip()
+    if name:
+        return name
+    if u.email:
+        return u.email.split("@")[0]
+    return f"Tec#{u.id}"
 
 def auditoria_detalle(request, pk: int):
-    # 1) Intenta como id de auditoría
-    obj = AuditoriaVisita.objects.select_related("asignacion", "tecnico").filter(pk=pk).first()
-
-    # 2) Fallback: si no existe, interpreta pk como id de asignación y toma la última auditoría
-    if not obj:
-        obj = (
-            AuditoriaVisita.objects
-            .select_related("asignacion", "tecnico")
-            .filter(asignacion_id=pk)
-            .order_by("-created_at", "-id")
-            .first()
-        )
+    obj = (AuditoriaVisita.objects
+           .select_related("asignacion", "tecnico")
+           .filter(pk=pk).first())
 
     if not obj:
-        # Renderiza tu template con mensaje de error (tú ya tienes uno)
-        return render(request, "admin_auditorias/detalle.html", {
-            "error": "No se encontró auditoría para ese ID."
-        }, status=404)
+        obj = (AuditoriaVisita.objects
+               .select_related("asignacion", "tecnico")
+               .filter(asignacion_id=pk)
+               .order_by("-created_at", "-id")
+               .first())
 
-    return render(request, "admin_auditorias/detalle.html", {"a": obj})
+    if not obj:
+        return render(request, "admin_auditorias/detalle.html",
+                      {"error": "No se encontró auditoría para ese ID."}, status=404)
+
+    tec_obj = obj.tecnico or getattr(obj.asignacion, "asignado_a", None)
+    tec_label = _display_user(tec_obj)
+    return render(request, "admin_auditorias/detalle.html", {"a": obj, "tec_label": tec_label})

@@ -13,13 +13,10 @@
   {% else %}
     <p><strong>ID auditoría:</strong> {{ a.id }}</p>
     <p><strong>Asignación:</strong> {{ a.asignacion_id }}</p>
-    <p><strong>Técnico:</strong>
-      {% if a.tecnico %}
-        {{ a.tecnico.first_name }} {{ a.tecnico.last_name }} ({{ a.tecnico.email }})
-      {% else %}
-        —
-      {% endif %}
-    </p>
+
+    <!-- Usa el label que arma el view (toma a.tecnico o, si no hay, asignado_a) -->
+    <p><strong>Técnico:</strong> {{ tec_label }}</p>
+
     <p><strong>Estado:</strong> {{ a.customer_status }}</p>
 
     {% if a.photo1 %}
