@@ -6,6 +6,7 @@ from django.urls import path, include, re_path
 from django.views.generic import TemplateView
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
+from django.views.static import serve as static_serve
 
 from rest_framework.routers import DefaultRouter
 from usuarios.views import UsuarioViewSet
@@ -52,3 +53,11 @@ urlpatterns = [
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
+
+# Media para PROD (Whitenoise no sirve media)
+if not settings.DEBUG:
+    urlpatterns += [
+        re_path(r'^media/(?P<path>.*)$',
+                static_serve,
+                {'document_root': settings.MEDIA_ROOT}),
+    ]
