@@ -6,6 +6,7 @@ from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from rest_framework.parsers import MultiPartParser, FormParser
 
 from .models import AuditoriaVisita
 from .serializers import AuditoriaVisitaSerializer
@@ -48,6 +49,7 @@ class AuditoriaVisitaViewSet(viewsets.ModelViewSet):
       - asignacion__comuna, asignacion__zona
       - created_at__gte / __lte
     """
+    parser_classes = (MultiPartParser, FormParser)  # ← permite subir fotos
     queryset = (
         AuditoriaVisita.objects
         .select_related("asignacion", "tecnico", "asignacion__asignado_a")
