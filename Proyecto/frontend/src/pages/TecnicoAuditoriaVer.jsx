@@ -77,26 +77,27 @@ function ymdToDmy(s) {
 }
 
 // ---------- Carga auditoría por asignación ----------
-async function findAuditByAsignacion(asignacionId) {
-  try {
-    const res = await api.get("/api/auditorias/", {
-      params: { asignacion: asignacionId },
-    });
-    const data = res.data;
-    const list = Array.isArray(data?.results)
-      ? data.results
-      : Array.isArray(data)
-      ? data
-      : [];
-    const exact = list.find((a) => Number(a.asignacion) === Number(asignacionId));
-    return exact || list[0] || null;
-  } catch {
-    return null;
-  }
-}
+// YA NO SE USA (se carga directamente en el useEffect más abajo)
+// async function findAuditByAsignacion(asignacionId) {
+//   try {
+//     const res = await api.get("/api/auditorias/", {
+//       params: { asignacion: asignacionId },
+//     });
+//     const data = res.data;
+//     const list = Array.isArray(data?.results)
+//       ? data.results
+//       : Array.isArray(data)
+//       ? data
+//       : [];
+//     const exact = list.find((a) => Number(a.asignacion) === Number(asignacionId));
+//     return exact || list[0] || null;
+//   } catch {
+//     return null;
+//   }
+// }
 
 export default function TecnicoAuditoriaVer() {
-  const { id } = useParams(); // id de asignación
+  const { id } = useParams(); // id puede ser auditoría o asignación
   const navigate = useNavigate();
 
   const [detalleAsignacion, setDetalleAsignacion] = useState(null);
@@ -105,24 +106,78 @@ export default function TecnicoAuditoriaVer() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    (async () => {
-      setLoading(true);
-      setError("");
-      try {
-        const resAsign = await api.get(`/api/asignaciones/${id}/`);
-        setDetalleAsignacion(resAsign.data || null);
+  let cancel = false;
 
-        const audit = await findAuditByAsignacion(id);
-        setAuditoria(audit);
-        if (!audit) setError("No se encontró la auditoría para esta asignación.");
-      } catch (err) {
-        console.error("GET ver auditoría:", err?.response?.status, err?.response?.data);
-        setError("No se pudo cargar la auditoría.");
-      } finally {
-        setLoading(false);
+  (async () => {
+    setLoading(true);
+    setError("");
+    setAuditoria(null);
+    setDetalleAsignacion(null);
+
+    // 1) Intentar como ID de AUDITORÍA (/api/auditorias/:id)
+    try {
+      const r = await api.get(`/api/auditorias/${id}/`);
+      if (cancel) return;
+
+      const a = r.data;
+      setAuditoria(a);
+
+      // cargar detalle de la asignación asociada
+      const asgId =
+        typeof a?.asignacion === "number" ? a.asignacion :
+        a?.asignacion?.id || null;
+
+      if (asgId) {
+        try {
+          const r2 = await api.get(`/api/asignaciones/${asgId}/`);
+          if (!cancel) setDetalleAsignacion(r2.data);
+        } catch {}
       }
-    })();
-  }, [id]);
+
+      setLoading(false);
+      return; // ✅ listo (era id de auditoría)
+    } catch (e) {
+      // si NO es 404, abortamos con error
+      if (e?.response?.status !== 404) {
+        if (!cancel) {
+          setError("No se pudo cargar la auditoría.");
+          setLoading(false);
+        }
+        return;
+      }
+    }
+
+    // 2) Fallback: tratar 'id' como ID de ASIGNACIÓN
+    try {
+      const rr = await api.get("/api/auditorias/", {
+        params: { asignacion: id, ordering: "-created_at,-id" },
+      });
+      const last = rr?.data?.results?.[0] || null;
+
+      if (!cancel) setAuditoria(last);
+
+      const asgId =
+        typeof last?.asignacion === "number" ? last.asignacion :
+        last?.asignacion?.id || null;
+
+      if (asgId) {
+        try {
+          const r2 = await api.get(`/api/asignaciones/${asgId}/`);
+          if (!cancel) setDetalleAsignacion(r2.data);
+        } catch {}
+      }
+
+      if (!cancel && !last) setError("No se encontró la auditoría para esta asignación.");
+    } catch {
+      if (!cancel) setError("No se pudo cargar la auditoría.");
+    } finally {
+      if (!cancel) setLoading(false);
+    }
+  })();
+
+  return () => { cancel = true; };
+}, [id]);
+
 
   const Row = ({ label, children }) => (
     <div style={{ display: "grid", gridTemplateColumns: "240px 1fr", gap: 8 }}>
