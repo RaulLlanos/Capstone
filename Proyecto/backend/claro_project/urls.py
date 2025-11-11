@@ -30,9 +30,12 @@ router.register(r"auditorias", AuditoriaVisitaViewSet, basename="auditorias")
 SpaView = method_decorator(ensure_csrf_cookie, name="dispatch")(TemplateView)
 
 urlpatterns = [
+    # Listado propio (no el admin de Django)
+    path("admin/auditorias/", core_views.auditorias_list, name="auditorias_list"),
     path("admin/auditorias/<int:pk>/", core_views.auditoria_detalle, name="auditoria_detalle"),
     path("panel/auditorias/<int:pk>/", core_views.auditoria_detalle, name="auditoria_detalle_alias"),
     path("admin/", admin.site.urls),
+    
 
     # API REST
     path("api/", include(router.urls)),
