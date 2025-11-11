@@ -30,16 +30,21 @@ router.register(r"auditorias", AuditoriaVisitaViewSet, basename="auditorias")
 SpaView = method_decorator(ensure_csrf_cookie, name="dispatch")(TemplateView)
 
 urlpatterns = [
+    re_path(r"^panel/.*$", SpaView.as_view(template_name="index.html")),
     # Listado propio (no el admin de Django)
     path("admin/auditorias/", core_views.auditorias_list, name="auditorias_list"),
     path("admin/auditorias/<int:pk>/", core_views.auditoria_detalle, name="auditoria_detalle"),
     path("panel/auditorias/<int:pk>/", core_views.auditoria_detalle, name="auditoria_detalle_alias"),
+
+    # Admin real de Django
     path("admin/", admin.site.urls),
     
 
     # API REST
     path("api/", include(router.urls)),
-    path('app/', TemplateView.as_view(template_name='index.html'), name='spa'),
+
+    # (Opcional) /app -> SPA
+    path("app/", SpaView.as_view(template_name='index.html'), name='spa'),
 
     # Auth (elige UNO de los dos enfoques; aquí dejo el explícito)
     # path("auth/", include("usuarios.auth_urls")),  # <- Si usas este, borra las rutas explícitas de abajo
@@ -50,10 +55,10 @@ urlpatterns = [
     path("auth/me",       MeView.as_view()),
     path("auth/csrf",     CsrfTokenView.as_view()),
 
-    # SPA en la raíz (con ensure_csrf_cookie)
-    path("", SpaView.as_view(template_name="index.html"), name="spa"),
+    # SPA en la raíz
+    path("", SpaView.as_view(template_name="index.html"), name="spa_root"),
 
-    # Cualquier ruta no api/admin/auth/static/media => index.html
+    # Catch-all para todo lo que NO sea api/admin/auth/static/media
     re_path(r"^(?!api/|admin/|auth/|static/|media/).*$",
             SpaView.as_view(template_name="index.html")),
             

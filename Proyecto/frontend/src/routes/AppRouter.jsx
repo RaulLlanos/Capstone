@@ -1,3 +1,4 @@
+// src/routes/AppRouter.jsx
 import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
@@ -12,7 +13,7 @@ import AuditorHistorial from "../pages/AuditorHistorial";
 import TecnicoDireccionesLista from "../pages/TecnicoDireccionesLista";
 import AuditorDireccionesLista from "../pages/AuditorDireccionesLista";
 import AuditorDireccionEdit from "../pages/AuditorDireccionEdit";
-import TecnicoReagendar from "../pages/TecnicoReagendar"
+import TecnicoReagendar from "../pages/TecnicoReagendar";
 import TecnicoAuditoriaAdd from "../pages/TecnicoAuditoriaAdd";
 import TecnicoAuditoriaVer from "../pages/TecnicoAuditoriaVer";
 import TecnicoCompletadas from "../pages/TecnicoCompletadas";
@@ -23,10 +24,7 @@ import AdminAuditoriasLista from "../pages/AdminAuditoriasLista";
 /** Guard 1: autenticación básica */
 function RequireAuth() {
   const { user, initializing } = useAuth();
-
-  // Mientras verificamos sesión (F5), no decidas aún
-  if (initializing) return null; // o un spinner si quieres
-
+  if (initializing) return null;
   if (!user) return <Navigate to="/login" replace />;
   return <Outlet />;
 }
@@ -34,9 +32,7 @@ function RequireAuth() {
 /** Guard 2: rol específico (lowercase) */
 function RequireRole({ allowed /* array de strings lowercase */ }) {
   const { user, initializing } = useAuth();
-
   if (initializing) return null;
-
   if (!user) return <Navigate to="/login" replace />;
   return allowed.includes(user.role) ? <Outlet /> : <Forbidden />;
 }
@@ -52,10 +48,8 @@ function Forbidden() {
 
 function RedirectByRole() {
   const { user, initializing } = useAuth();
-
   if (initializing) return null;
   if (!user) return <Navigate to="/login" replace />;
-
   return user.role === "administrador"
     ? <Navigate to="/auditor" replace />
     : <Navigate to="/tecnico" replace />;
@@ -67,17 +61,12 @@ function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Guarda la última ruta (excepto /login)
   useEffect(() => {
     if (location.pathname !== "/login") {
-      try {
-        localStorage.setItem("lastRoute", location.pathname + location.search);
-      } catch { /* empty */ }
+      try { localStorage.setItem("lastRoute", location.pathname + location.search); } catch {}
     }
   }, [location.pathname, location.search]);
 
-  // Si ya estamos logueados y (por refresh) quedamos en /login,
-  // al terminar de inicializar vuelve a la última ruta guardada.
   useEffect(() => {
     if (!initializing && user && location.pathname === "/login") {
       const last = localStorage.getItem("lastRoute") || "/";
@@ -87,7 +76,6 @@ function AppShell() {
 
   return (
     <>
-      {/* Muestra NavBar solo cuando ya terminó la inicialización y hay sesión */}
       {!initializing && user && <NavBar user={user} onLogout={logout} />}
 
       <Routes>
@@ -98,18 +86,28 @@ function AppShell() {
         <Route element={<RequireAuth />}>
           <Route index element={<RedirectByRole />} />
 
-          {/* AUDITOR */}
+          {/* AUDITOR (rol administrador en backend) */}
           <Route element={<RequireRole allowed={["administrador"]} />}>
             <Route path="/auditor" element={<AuditorDashboard />} />
             <Route path="/registro" element={<Registro />} />
-            <Route path="/admin/usuarios" element={<AdminUsuariosLista />} />
-            <Route path="/admin/usuarios/:id/editar" element={<AdminUsuarioEdit />} />
-            <Route path="/admin/auditorias" element={<AdminAuditoriasLista />} />
-            <Route path="/admin/auditorias/:id" element={<TecnicoAuditoriaVer />} />
+
+            {/* IMPORTANTES: mover /admin/... -> /panel/... */}
+            <Route path="/panel/usuarios" element={<AdminUsuariosLista />} />
+            <Route path="/panel/usuarios/:id/editar" element={<AdminUsuarioEdit />} />
+            <Route path="/panel/auditorias" element={<AdminAuditoriasLista />} />
+            <Route path="/panel/auditorias/:id" element={<TecnicoAuditoriaVer />} />
+
+            {/* Rutas de gestión de direcciones del auditor */}
             <Route path="/auditor/direcciones/nueva" element={<AuditorDireccionAdd />} />
             <Route path="/auditor/direcciones" element={<AuditorDireccionesLista />} />
             <Route path="/auditor/direcciones/:id/editar" element={<AuditorDireccionEdit />} />
             <Route path="/auditor/historial" element={<AuditorHistorial />} />
+
+            {/* Redirecciones legadas desde /admin/... hacia /panel/... (solo funcionan en navegación SPA) */}
+            <Route path="/admin/usuarios" element={<Navigate to="/panel/usuarios" replace />} />
+            <Route path="/admin/usuarios/:id/editar" element={<Navigate to="/panel/usuarios/:id/editar" replace />} />
+            <Route path="/admin/auditorias" element={<Navigate to="/panel/auditorias" replace />} />
+            <Route path="/admin/auditorias/:id" element={<Navigate to="/panel/auditorias/:id" replace />} />
           </Route>
 
           {/* TECNICO */}
