@@ -203,41 +203,37 @@ export default function AdminAuditoriasLista() {
         {loading && <div className={styles.helper} style={{ marginTop: 8 }}>Cargando…</div>}
 
         <div style={{ overflowX: "auto", marginTop: 12 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead style={{ textAlign: "left" }}>
+          <table className={styles.tableRelaxed}>
+            <thead>
               <tr>
-                <th>ID</th>
-                <th>Fecha</th>
-                <th>Dirección</th>
-                <th>Comuna</th>
-                <th>Técnico</th>
-                <th>Marca</th>
-                <th>Acción</th>
+                <th className={styles.cellPadded}>ID</th>
+                <th className={styles.cellPadded}>Fecha</th>
+                <th className={styles.cellPadded}>Dirección</th>
+                <th className={styles.cellPadded}>Comuna</th>
+                <th className={styles.cellPadded}>Técnico</th>
+                <th className={styles.cellPadded}>Marca</th>
+                <th className={styles.cellPadded}>Acción</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((r) => (
-                <tr key={r.id} style={{ borderTop: "1px solid #e5e7eb" }}>
-                  <td>{r.id}</td>
-                  <td>{r.fecha}</td>
-                  <td>{r.direccion}</td>
-                  <td>{r.comuna}</td>
-                  <td>{r.tecnico}</td>
-                  <td>{r.marca}</td>
-                  <td>
-                    {/* Enlaza por ID de AUDITORÍA (correcto) */}
-                    <Link className={styles.button} to={`/panel/auditorias/${r.id}`}>
+                <tr key={r.id} className={styles.rowCard}>
+                  <td className={styles.cellPadded}>{r.id}</td>
+                  <td className={styles.cellPadded}>{r.fecha}</td>
+                  <td className={styles.cellPadded}>{r.direccion}</td>
+                  <td className={styles.cellPadded}>{r.comuna}</td>
+                  <td className={styles.cellPadded}>{r.tecnico}</td>
+                  <td className={styles.cellPadded}>{r.marca}</td>
+                  <td className={styles.cellPadded}>
+                    <Link
+                      className={`${styles.button} ${styles.buttonSlim}`}
+                      to={`/panel/auditorias/${r.id}`}
+                    >
                       Ver detalles
                     </Link>
                   </td>
                 </tr>
               ))}
-
-              {!loading && filtered.length === 0 && (
-                <tr>
-                  <td colSpan={7} className={styles.helper}>Sin resultados.</td>
-                </tr>
-              )}
             </tbody>
           </table>
         </div>

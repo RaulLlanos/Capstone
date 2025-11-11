@@ -1,5 +1,5 @@
 // src/routes/AppRouter.jsx
-import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import NavBar from "../components/NavBar";
@@ -29,12 +29,13 @@ function RequireAuth() {
   return <Outlet />;
 }
 
-/** Guard 2: rol específico (lowercase) */
+/** Guard 2: rol específico (normaliza role/rol a lowercase) */
 function RequireRole({ allowed /* array de strings lowercase */ }) {
   const { user, initializing } = useAuth();
   if (initializing) return null;
   if (!user) return <Navigate to="/login" replace />;
-  return allowed.includes(user.role) ? <Outlet /> : <Forbidden />;
+  const role = String(user.role ?? user.rol ?? "").toLowerCase();
+  return allowed.includes(role) ? <Outlet /> : <Forbidden />;
 }
 
 function Forbidden() {
@@ -50,9 +51,18 @@ function RedirectByRole() {
   const { user, initializing } = useAuth();
   if (initializing) return null;
   if (!user) return <Navigate to="/login" replace />;
-  return user.role === "administrador"
-    ? <Navigate to="/auditor" replace />
-    : <Navigate to="/tecnico" replace />;
+  const role = String(user.role ?? user.rol ?? "").toLowerCase();
+  return role === "administrador" ? <Navigate to="/auditor" replace /> : <Navigate to="/tecnico" replace />;
+}
+
+/** Redirección que conserva params, p.ej. :id */
+function RedirectWithParams({ toPattern }) {
+  const params = useParams();
+  let to = toPattern;
+  Object.entries(params).forEach(([k, v]) => {
+    to = to.replace(`:${k}`, encodeURIComponent(v));
+  });
+  return <Navigate to={to} replace />;
 }
 
 /** Layout con efectos de lastRoute */
@@ -91,7 +101,7 @@ function AppShell() {
             <Route path="/auditor" element={<AuditorDashboard />} />
             <Route path="/registro" element={<Registro />} />
 
-            {/* IMPORTANTES: mover /admin/... -> /panel/... */}
+            {/* NUEVAS rutas /panel/... */}
             <Route path="/panel/usuarios" element={<AdminUsuariosLista />} />
             <Route path="/panel/usuarios/:id/editar" element={<AdminUsuarioEdit />} />
             <Route path="/panel/auditorias" element={<AdminAuditoriasLista />} />
@@ -103,11 +113,11 @@ function AppShell() {
             <Route path="/auditor/direcciones/:id/editar" element={<AuditorDireccionEdit />} />
             <Route path="/auditor/historial" element={<AuditorHistorial />} />
 
-            {/* Redirecciones legadas desde /admin/... hacia /panel/... (solo funcionan en navegación SPA) */}
+            {/* Redirecciones legadas desde /admin/... hacia /panel/... */}
             <Route path="/admin/usuarios" element={<Navigate to="/panel/usuarios" replace />} />
-            <Route path="/admin/usuarios/:id/editar" element={<Navigate to="/panel/usuarios/:id/editar" replace />} />
             <Route path="/admin/auditorias" element={<Navigate to="/panel/auditorias" replace />} />
-            <Route path="/admin/auditorias/:id" element={<Navigate to="/panel/auditorias/:id" replace />} />
+            <Route path="/admin/usuarios/:id/editar" element={<RedirectWithParams toPattern="/panel/usuarios/:id/editar" />} />
+            <Route path="/admin/auditorias/:id" element={<RedirectWithParams toPattern="/panel/auditorias/:id" />} />
           </Route>
 
           {/* TECNICO */}
