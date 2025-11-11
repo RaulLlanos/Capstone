@@ -99,30 +99,28 @@
 
 /* NUEVO */
 
-/* tabla más "aireada" */
+/* espacio vertical tipo "cards" por fila, sin cambiar estilos de color */
 .tableRelaxed {
   border-collapse: separate !important;
-  border-spacing: 0 10px !important; /* espacio vertical entre filas */
+  border-spacing: 0 10px !important; /* separación vertical entre filas */
   width: 100%;
 }
 
-/* cada fila como tarjetita suave */
 .rowCard {
   background: #fff;
   box-shadow: 0 1px 3px rgba(0,0,0,.06);
   border-radius: 10px;
 }
 
-/* padding cómodo en celdas */
 .cellPadded {
   padding: 14px 16px !important;
   vertical-align: middle;
 }
 
-/* botón un poquito más compacto */
 .buttonSlim {
   display: inline-block;
   padding: 8px 12px;
   line-height: 1;
 }
+
 

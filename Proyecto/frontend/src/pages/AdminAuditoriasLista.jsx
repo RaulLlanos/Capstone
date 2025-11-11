@@ -204,17 +204,7 @@ export default function AdminAuditoriasLista() {
 
         <div style={{ overflowX: "auto", marginTop: 12 }}>
           <table className={styles.tableRelaxed}>
-            <thead>
-              <tr>
-                <th className={styles.cellPadded}>ID</th>
-                <th className={styles.cellPadded}>Fecha</th>
-                <th className={styles.cellPadded}>Dirección</th>
-                <th className={styles.cellPadded}>Comuna</th>
-                <th className={styles.cellPadded}>Técnico</th>
-                <th className={styles.cellPadded}>Marca</th>
-                <th className={styles.cellPadded}>Acción</th>
-              </tr>
-            </thead>
+            <thead>…</thead>
             <tbody>
               {filtered.map((r) => (
                 <tr key={r.id} className={styles.rowCard}>
@@ -225,10 +215,7 @@ export default function AdminAuditoriasLista() {
                   <td className={styles.cellPadded}>{r.tecnico}</td>
                   <td className={styles.cellPadded}>{r.marca}</td>
                   <td className={styles.cellPadded}>
-                    <Link
-                      className={`${styles.button} ${styles.buttonSlim}`}
-                      to={`/panel/auditorias/${r.id}`}
-                    >
+                    <Link className={`${styles.button} ${styles.buttonSlim}`} to={`/panel/auditorias/${r.id}`}>
                       Ver detalles
                     </Link>
                   </td>
