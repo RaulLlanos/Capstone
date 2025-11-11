@@ -30,7 +30,7 @@ import AdminUsuariosLista from "../pages/AdminUsuariosLista";
 import AdminUsuarioEdit from "../pages/AdminUsuarioEdit";
 import AdminAuditoriasLista from "../pages/AdminAuditoriasLista";
 
-/** Guarda params y los reinyecta en la ruta destino (evita “:id” literal) */
+/** Puente que copia params y arma la URL destino (evita ":id" literal) */
 function RedirectWithParams({ toPattern }) {
   const params = useParams();
   let to = toPattern;
@@ -48,12 +48,12 @@ function RequireAuth() {
   return <Outlet />;
 }
 
-/** Guard 2: rol específico */
+/** Guard 2: rol específico (usa rol normalizado) */
 function RequireRole({ allowed }) {
   const { user, initializing } = useAuth();
   if (initializing) return null;
   if (!user) return <Navigate to="/login" replace />;
-  const role = String(user?.role ?? user?.rol ?? "").toLowerCase();
+  const role = String(user?.role || user?.rol || "").toLowerCase();
   return allowed.includes(role) ? <Outlet /> : <Forbidden />;
 }
 
@@ -70,13 +70,13 @@ function RedirectByRole() {
   const { user, initializing } = useAuth();
   if (initializing) return null;
   if (!user) return <Navigate to="/login" replace />;
-  const role = String(user?.role ?? user?.rol ?? "").toLowerCase();
+  const role = String(user?.role || user?.rol || "").toLowerCase();
   return role === "administrador"
     ? <Navigate to="/auditor" replace />
     : <Navigate to="/tecnico" replace />;
 }
 
-/** Layout con NavBar y manejo de lastRoute */
+/** Layout con lastRoute */
 function AppShell() {
   const { user, logout, initializing } = useAuth();
   const location = useLocation();
@@ -84,9 +84,7 @@ function AppShell() {
 
   useEffect(() => {
     if (location.pathname !== "/login") {
-      try {
-        localStorage.setItem("lastRoute", location.pathname + location.search);
-      } catch {}
+      try { localStorage.setItem("lastRoute", location.pathname + location.search); } catch {}
     }
   }, [location.pathname, location.search]);
 
@@ -109,12 +107,12 @@ function AppShell() {
         <Route element={<RequireAuth />}>
           <Route index element={<RedirectByRole />} />
 
-          {/* ADMIN (rol administrador) */}
+          {/* ADMIN (rol "administrador") */}
           <Route element={<RequireRole allowed={["administrador"]} />}>
             <Route path="/auditor" element={<AuditorDashboard />} />
             <Route path="/registro" element={<Registro />} />
 
-            {/* Rutas de panel */}
+            {/* Panel (antes /admin/..., ahora /panel/...) */}
             <Route path="/panel/usuarios" element={<AdminUsuariosLista />} />
             <Route path="/panel/usuarios/:id/editar" element={<AdminUsuarioEdit />} />
             <Route path="/panel/auditorias" element={<AdminAuditoriasLista />} />
@@ -126,7 +124,7 @@ function AppShell() {
             <Route path="/auditor/direcciones/:id/editar" element={<AuditorDireccionEdit />} />
             <Route path="/auditor/historial" element={<AuditorHistorial />} />
 
-            {/* Redirecciones legadas /admin/... -> /panel/... */}
+            {/* Redirecciones legadas /admin/... -> /panel/... (con params reales) */}
             <Route path="/admin/usuarios" element={<Navigate to="/panel/usuarios" replace />} />
             <Route
               path="/admin/usuarios/:id/editar"
@@ -139,7 +137,7 @@ function AppShell() {
             />
           </Route>
 
-          {/* TÉCNICO */}
+          {/* TECNICO */}
           <Route element={<RequireRole allowed={["tecnico"]} />}>
             <Route path="/tecnico" element={<TecnicoDashboard />} />
             <Route path="/tecnico/direcciones" element={<TecnicoDireccionesLista />} />
