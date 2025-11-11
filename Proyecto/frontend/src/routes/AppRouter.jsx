@@ -82,9 +82,15 @@ function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
 
+  // ✅ NO guardar rutas con placeholders tipo "/:id"
   useEffect(() => {
     if (location.pathname !== "/login") {
-      try { localStorage.setItem("lastRoute", location.pathname + location.search); } catch {}
+      const isPlaceholder = location.pathname.includes("/:"); // evita guardar placeholders
+      if (!isPlaceholder) {
+        try {
+          localStorage.setItem("lastRoute", location.pathname + location.search);
+        } catch {}
+      }
     }
   }, [location.pathname, location.search]);
 
