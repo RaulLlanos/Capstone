@@ -90,20 +90,35 @@ def _display_user(u):
     return f"Tec#{u.id}"
 
 def auditoria_detalle(request, pk: int):
-    obj = (AuditoriaVisita.objects
-           .select_related("asignacion", "tecnico")
-           .filter(pk=pk).first())
+    aid = request.GET.get("aid")     # fuerza “audit id”
+    asid = request.GET.get("asid")   # fuerza “asignación id”
 
+    obj = None
+
+    # 1) Si llega aid en query ⇒ intenta por id de auditoría
+    if aid and str(aid).isdigit():
+        obj = (AuditoriaVisita.objects
+               .select_related("asignacion","tecnico")
+               .filter(pk=int(aid)).first())
+
+    # 2) Si no, intenta por path param como id de auditoría
     if not obj:
         obj = (AuditoriaVisita.objects
-               .select_related("asignacion", "tecnico")
-               .filter(asignacion_id=pk)
-               .order_by("-created_at", "-id")
+               .select_related("asignacion","tecnico")
+               .filter(pk=pk).first())
+
+    # 3) Si aún no, prueba como id de asignación (query o path)
+    if not obj:
+        try_asig = int(asid) if asid and str(asid).isdigit() else pk
+        obj = (AuditoriaVisita.objects
+               .select_related("asignacion","tecnico")
+               .filter(asignacion_id=try_asig)
+               .order_by("-created_at","-id")
                .first())
 
     if not obj:
         return render(request, "admin_auditorias/detalle.html",
-                      {"error": "No se encontró auditoría para ese ID."}, status=404)
+                      {"error": "No se encontró auditoría para ese identificador."}, status=404)
 
     tec_obj = obj.tecnico or getattr(obj.asignacion, "asignado_a", None)
     tec_label = _display_user(tec_obj)
