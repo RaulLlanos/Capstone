@@ -4,14 +4,34 @@
   <meta charset="utf-8">
   <title>Auditorías completadas</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: 8px; }
+    th { background: #f5f5f5; text-align: left; }
+  </style>
 </head>
 <body>
   <h1>Auditorías completadas</h1>
 
+  <!-- Filtros arriba -->
+  <div style="margin-bottom:12px">
+    <a href="{% url 'auditorias_list' %}?mode=all">Todas (recientes primero)</a> |
+    <a href="{% url 'auditorias_list' %}?mode=last">Última por asignación</a>
+    {% if asignacion %}
+      | <strong>Asignación {{ asignacion }}</strong>
+      | <a href="{% url 'auditorias_list' %}?mode={{ mode|default:'all' }}">Quitar filtro</a>
+    {% endif %}
+  </div>
+
   <table>
     <thead>
       <tr>
-        <th>ID</th><th>Fecha</th><th>Dirección</th><th>Comuna</th><th>Técnico</th><th>Acción</th>
+        <th>ID</th>
+        <th>Fecha</th>
+        <th>Dirección</th>
+        <th>Comuna</th>
+        <th>Técnico</th>
+        <th>Acción</th>
       </tr>
     </thead>
     <tbody>
@@ -31,8 +51,13 @@
             {% endif %}
           </td>
           <td>
-            <!-- AQUÍ va el link correcto al detalle por ID de AUDITORÍA -->
+            <!-- Detalle por ID de AUDITORÍA -->
             <a href="{% url 'auditoria_detalle' a.id %}">Ver detalles</a>
+            &nbsp;|&nbsp;
+            <!-- Atajo para ver TODAS las auditorías de esta asignación -->
+            <a href="{% url 'auditorias_list' %}?asignacion={{ a.asignacion_id }}&mode={{ mode|default:'all' }}">
+              Ver todas de esta asignación
+            </a>
           </td>
         </tr>
       {% empty %}
@@ -40,5 +65,18 @@
       {% endfor %}
     </tbody>
   </table>
+
+  <!-- Paginación (solo si la vista la envía) -->
+  {% if page_obj and paginator %}
+    <div style="margin-top:12px">
+      {% if page_obj.has_previous %}
+        <a href="?page={{ page_obj.previous_page_number }}&mode={{ mode|default:'all' }}{% if asignacion %}&asignacion={{ asignacion }}{% endif %}">« Anterior</a>
+      {% endif %}
+      <span> Página {{ page_obj.number }} de {{ paginator.num_pages }} </span>
+      {% if page_obj.has_next %}
+        <a href="?page={{ page_obj.next_page_number }}&mode={{ mode|default:'all' }}{% if asignacion %}&asignacion={{ asignacion }}{% endif %}">Siguiente »</a>
+      {% endif %}
+    </div>
+  {% endif %}
 </body>
 </html>

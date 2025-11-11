@@ -6,6 +6,8 @@ from core.models import Notificacion, LogSistema
 from core.serializers import NotificacionSerializer, LogSistemaSerializer
 from django.shortcuts import render, redirect
 from auditoria.models import AuditoriaVisita
+from django.db.models import Max
+from django.core.paginator import Paginator
 
 
 class NotificacionViewSet(viewsets.ModelViewSet):
@@ -125,8 +127,42 @@ def auditoria_detalle(request, pk: int):
     return render(request, "admin_auditorias/detalle.html", {"a": obj, "tec_label": tec_label})
 
 def auditorias_list(request):
+    """
+    /admin/auditorias/?mode=all            -> todas, más nuevas arriba
+    /admin/auditorias/?mode=last           -> solo la última por asignación
+    /admin/auditorias/?asignacion=61       -> todas las de esa asignación (más nuevas arriba)
+    Se puede combinar con page=? para paginar.
+    """
+    mode = request.GET.get("mode", "all")
+    asignacion = request.GET.get("asignacion")
+
     qs = (AuditoriaVisita.objects
-          .select_related("asignacion", "tecnico")
-          .order_by("-created_at", "-id"))
-    # ‘auditorias’ es lo que el template recorrerá
-    return render(request, "admin_auditorias/lista.html", {"auditorias": qs})
+          .select_related("asignacion", "tecnico"))
+
+    # Filtro opcional por asignación (muestra TODAS las de esa dirección, más nuevas arriba)
+    if asignacion:
+        qs = qs.filter(asignacion_id=asignacion)
+
+    if mode == "last":
+        # Una por asignación (la última)
+        last_ids = (AuditoriaVisita.objects
+                    .values("asignacion_id")
+                    .annotate(last_id=Max("id"))
+                    .values_list("last_id", flat=True))
+        qs = qs.filter(id__in=list(last_ids)).order_by("-created_at", "-id")
+    else:
+        # TODAS, más nuevas arriba
+        qs = qs.order_by("-created_at", "-id")
+
+    # Paginación server-side (no rompe nada y evita páginas gigantes)
+    paginator = Paginator(qs, 50)  # 50 por página
+    page_obj = paginator.get_page(request.GET.get("page", 1))
+
+    ctx = {
+        "auditorias": page_obj.object_list,
+        "page_obj": page_obj,
+        "paginator": paginator,
+        "mode": mode,
+        "asignacion": asignacion,
+    }
+    return render(request, "admin_auditorias/lista.html", ctx)
