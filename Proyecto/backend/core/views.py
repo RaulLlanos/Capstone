@@ -4,7 +4,7 @@ from django.utils.html import escape
 from rest_framework import viewsets, permissions
 from core.models import Notificacion, LogSistema
 from core.serializers import NotificacionSerializer, LogSistemaSerializer
-from django.shortcuts import render, get_object_or_404
+from django.shortcuts import render, redirect
 from auditoria.models import AuditoriaVisita
 
 
@@ -123,3 +123,10 @@ def auditoria_detalle(request, pk: int):
     tec_obj = obj.tecnico or getattr(obj.asignacion, "asignado_a", None)
     tec_label = _display_user(tec_obj)
     return render(request, "admin_auditorias/detalle.html", {"a": obj, "tec_label": tec_label})
+
+def auditorias_list(request):
+    qs = (AuditoriaVisita.objects
+          .select_related("asignacion", "tecnico")
+          .order_by("-created_at", "-id"))
+    # ‘auditorias’ es lo que el template recorrerá
+    return render(request, "admin_auditorias/lista.html", {"auditorias": qs})
