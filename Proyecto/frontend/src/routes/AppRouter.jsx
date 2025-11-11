@@ -1,5 +1,14 @@
 // src/routes/AppRouter.jsx
-import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useNavigate, useParams } from "react-router-dom";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useParams,
+} from "react-router-dom";
 import { useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import NavBar from "../components/NavBar";
@@ -21,7 +30,17 @@ import AdminUsuariosLista from "../pages/AdminUsuariosLista";
 import AdminUsuarioEdit from "../pages/AdminUsuarioEdit";
 import AdminAuditoriasLista from "../pages/AdminAuditoriasLista";
 
-/** Guard 1: autenticación básica */
+/** Guarda params y los reinyecta en la ruta destino (evita “:id” literal) */
+function RedirectWithParams({ toPattern }) {
+  const params = useParams();
+  let to = toPattern;
+  Object.entries(params).forEach(([k, v]) => {
+    to = to.replace(`:${k}`, encodeURIComponent(v));
+  });
+  return <Navigate to={to} replace />;
+}
+
+/** Guard 1: autenticación */
 function RequireAuth() {
   const { user, initializing } = useAuth();
   if (initializing) return null;
@@ -29,12 +48,12 @@ function RequireAuth() {
   return <Outlet />;
 }
 
-/** Guard 2: rol específico (normaliza role/rol a lowercase) */
-function RequireRole({ allowed /* array de strings lowercase */ }) {
+/** Guard 2: rol específico */
+function RequireRole({ allowed }) {
   const { user, initializing } = useAuth();
   if (initializing) return null;
   if (!user) return <Navigate to="/login" replace />;
-  const role = String(user.role ?? user.rol ?? "").toLowerCase();
+  const role = String(user?.role ?? user?.rol ?? "").toLowerCase();
   return allowed.includes(role) ? <Outlet /> : <Forbidden />;
 }
 
@@ -51,21 +70,13 @@ function RedirectByRole() {
   const { user, initializing } = useAuth();
   if (initializing) return null;
   if (!user) return <Navigate to="/login" replace />;
-  const role = String(user.role ?? user.rol ?? "").toLowerCase();
-  return role === "administrador" ? <Navigate to="/auditor" replace /> : <Navigate to="/tecnico" replace />;
+  const role = String(user?.role ?? user?.rol ?? "").toLowerCase();
+  return role === "administrador"
+    ? <Navigate to="/auditor" replace />
+    : <Navigate to="/tecnico" replace />;
 }
 
-/** Redirección que conserva params, p.ej. :id */
-function RedirectWithParams({ toPattern }) {
-  const params = useParams();
-  let to = toPattern;
-  Object.entries(params).forEach(([k, v]) => {
-    to = to.replace(`:${k}`, encodeURIComponent(v));
-  });
-  return <Navigate to={to} replace />;
-}
-
-/** Layout con efectos de lastRoute */
+/** Layout con NavBar y manejo de lastRoute */
 function AppShell() {
   const { user, logout, initializing } = useAuth();
   const location = useLocation();
@@ -73,7 +84,9 @@ function AppShell() {
 
   useEffect(() => {
     if (location.pathname !== "/login") {
-      try { localStorage.setItem("lastRoute", location.pathname + location.search); } catch {}
+      try {
+        localStorage.setItem("lastRoute", location.pathname + location.search);
+      } catch {}
     }
   }, [location.pathname, location.search]);
 
@@ -96,31 +109,37 @@ function AppShell() {
         <Route element={<RequireAuth />}>
           <Route index element={<RedirectByRole />} />
 
-          {/* AUDITOR (rol administrador en backend) */}
+          {/* ADMIN (rol administrador) */}
           <Route element={<RequireRole allowed={["administrador"]} />}>
             <Route path="/auditor" element={<AuditorDashboard />} />
             <Route path="/registro" element={<Registro />} />
 
-            {/* NUEVAS rutas /panel/... */}
+            {/* Rutas de panel */}
             <Route path="/panel/usuarios" element={<AdminUsuariosLista />} />
             <Route path="/panel/usuarios/:id/editar" element={<AdminUsuarioEdit />} />
             <Route path="/panel/auditorias" element={<AdminAuditoriasLista />} />
             <Route path="/panel/auditorias/:id" element={<TecnicoAuditoriaVer />} />
 
-            {/* Rutas de gestión de direcciones del auditor */}
+            {/* Auditor: direcciones */}
             <Route path="/auditor/direcciones/nueva" element={<AuditorDireccionAdd />} />
             <Route path="/auditor/direcciones" element={<AuditorDireccionesLista />} />
             <Route path="/auditor/direcciones/:id/editar" element={<AuditorDireccionEdit />} />
             <Route path="/auditor/historial" element={<AuditorHistorial />} />
 
-            {/* Redirecciones legadas desde /admin/... hacia /panel/... */}
+            {/* Redirecciones legadas /admin/... -> /panel/... */}
             <Route path="/admin/usuarios" element={<Navigate to="/panel/usuarios" replace />} />
+            <Route
+              path="/admin/usuarios/:id/editar"
+              element={<RedirectWithParams toPattern="/panel/usuarios/:id/editar" />}
+            />
             <Route path="/admin/auditorias" element={<Navigate to="/panel/auditorias" replace />} />
-            <Route path="/admin/usuarios/:id/editar" element={<RedirectWithParams toPattern="/panel/usuarios/:id/editar" />} />
-            <Route path="/admin/auditorias/:id" element={<RedirectWithParams toPattern="/panel/auditorias/:id" />} />
+            <Route
+              path="/admin/auditorias/:id"
+              element={<RedirectWithParams toPattern="/panel/auditorias/:id" />}
+            />
           </Route>
 
-          {/* TECNICO */}
+          {/* TÉCNICO */}
           <Route element={<RequireRole allowed={["tecnico"]} />}>
             <Route path="/tecnico" element={<TecnicoDashboard />} />
             <Route path="/tecnico/direcciones" element={<TecnicoDireccionesLista />} />
