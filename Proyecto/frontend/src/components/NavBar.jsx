@@ -32,8 +32,8 @@ export default function NavBar() {
     if (isAdmin) {
       return [
         { to: "/auditor/direcciones", label: "Direcciones" },
-        { to: "/admin/usuarios", label: "Usuarios" },
-        { to: "/admin/auditorias", label: "Auditorias" },
+        { to: "/panel/usuarios",      label: "Usuarios" },
+        { to: "/panel/auditorias",    label: "Auditorías" },
         { to: "/auditor/historial", label: "Historial" }
       ];
     }
