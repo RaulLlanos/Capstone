@@ -144,7 +144,7 @@ export default function AdminUsuariosLista() {
                   <td>{u.email || u.username || "—"}</td>
                   <td>{(u.rol || u.role || "—").toString().toUpperCase()}</td>
                   <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <Link className={styles.button} to={`/admin/usuarios/${u.id}/editar`}>
+                    <Link className={styles.button} to={`/panel/usuarios/${u.id}/editar`}>
                       Editar
                     </Link>
                     <button

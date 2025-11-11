@@ -1,227 +1,75 @@
-/* eslint-disable no-unused-vars */
 // src/pages/AdminUsuarioEdit.jsx
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import api from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import styles from "./Login.module.css";
 
-// Endpoints posibles (el primero que responda se usa)
-const USER_DETAIL_ENDPOINTS = (id) => [
-  `/api/usuarios/${id}/`,
-  `/auth/users/${id}/`,
-  `/api/users/${id}/`,
-];
-
-const ROLES = [
-  { value: "administrador", label: "Administrador" },
-  { value: "tecnico", label: "Técnico" },
-];
-
 export default function AdminUsuarioEdit() {
-  const { id } = useParams();
-  const navigate = useNavigate();
   const { user } = useAuth();
-
   const role = String(user?.rol || user?.role || "").toLowerCase();
   const isAdmin = role === "administrador";
 
+  const { id } = useParams();
+  const navigate = useNavigate();
+
+  const [form, setForm] = useState({
+    first_name: "",
+    last_name: "",
+    email: "",
+    rol: "tecnico",
+    is_active: true,
+  });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [ok, setOk] = useState("");
-  const [fieldErrors, setFieldErrors] = useState({});
 
-  // Form canonizado
-  const [form, setForm] = useState({
-    name: "",
-    email: "",
-    rol: "tecnico", // default
-  });
-
-  // Guardamos qué endpoint funcionó para reusar en PUT/PATCH
-  const activeEndpoint = useRef(null);
-
-  const canSave = useMemo(() => {
-    return form.email.trim().length > 3 && form.rol;
-  }, [form.email, form.rol]);
-
-  // Normaliza un usuario del backend a nuestro formulario
-  const normalizeUser = (u) => {
-    const name =
-      u.name ||
-      (u.first_name || u.last_name ? `${u.first_name || ""} ${u.last_name || ""}`.trim() : "") ||
-      u.full_name ||
-      u.display_name ||
-      "";
-    const email = u.email || u.username || "";
-    const rol = (u.rol || u.role || "").toString().toLowerCase() || "tecnico";
-    return { name, email, rol };
-  };
-
-  // Carga detalle
   useEffect(() => {
-    let cancelled = false;
+    let mounted = true;
     (async () => {
       setLoading(true);
       setError("");
-      setOk("");
-      setFieldErrors({});
       try {
-        let res = null;
-        for (const ep of USER_DETAIL_ENDPOINTS(id)) {
-          try {
-            const r = await api.get(ep);
-            if (r?.data) {
-              res = r;
-              activeEndpoint.current = ep; // éxito
-              break;
-            }
-          } catch (_) {
-            // probar siguiente
-          }
-        }
-        if (!res) throw new Error("No se pudo obtener el usuario.");
-        if (cancelled) return;
-        const canon = normalizeUser(res.data || {});
-        setForm(canon);
-      } catch (err) {
-        console.error("GET usuario:", err?.response?.status, err?.response?.data);
-        setError("No se pudo cargar el usuario.");
+        const res = await api.get(`/api/usuarios/${id}/`);
+        if (!mounted) return;
+        const d = res.data || {};
+        setForm({
+          first_name: d.first_name || "",
+          last_name: d.last_name || "",
+          email: d.email || "",
+          rol: (d.rol || d.role || "tecnico").toLowerCase(),
+          is_active: d.is_active !== false,
+        });
+      } catch (e) {
+        console.error("GET usuario", e?.response?.status, e?.response?.data);
+        if (mounted) setError("No se pudo cargar el usuario.");
       } finally {
-        if (!cancelled) setLoading(false);
+        if (mounted) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => { mounted = false; };
   }, [id]);
 
-  const onChange = (e) => {
-    const { name, value } = e.target;
-    setForm((f) => ({ ...f, [name]: value }));
-    setFieldErrors((fe) => ({ ...fe, [name]: "" }));
-    setOk("");
-    setError("");
-  };
-
-  const validate = () => {
-    const fe = {};
-    if (!form.email.trim()) fe.email = "Requerido.";
-    if (!form.rol) fe.rol = "Requerido.";
-    // Nombre es opcional, pero si existe validamos mínimo
-    if (form.name && form.name.trim().length < 2) fe.name = "Muy corto.";
-    return fe;
-  };
-
-  // Construye payload compatible con distintas APIs
-  // Construye payload compatible con distintas APIs
-  const buildPayload = () => {
-    const trimmedName = form.name?.trim() || "";
-    let first_name = "";
-    let last_name = "";
-
-    // si el usuario escribió nombre completo, intentamos dividirlo
-    if (trimmedName.includes(" ")) {
-      const parts = trimmedName.split(" ");
-      first_name = parts[0];
-      last_name = parts.slice(1).join(" ");
-    } else {
-      first_name = trimmedName;
-    }
-
-    const payload = {
-      name: trimmedName,       // para backends que usan "name"
-      first_name,              // para backends tipo Django User
-      last_name,               // idem
-      email: form.email?.trim(),
-      username: form.email?.trim(), // por compatibilidad si el backend usa username
-      rol: form.rol,
-      role: form.rol,
-    };
-
-    // Limpia campos vacíos
-    Object.keys(payload).forEach((k) => {
-      if (payload[k] === undefined || payload[k] === "") delete payload[k];
-    });
-
-    return payload;
-  };
-
-
-  const handleSave = async (e) => {
+  async function handleSubmit(e) {
     e.preventDefault();
-    setOk("");
+    setSaving(true);
     setError("");
-    setFieldErrors({});
-
-    const fe = validate();
-    if (Object.keys(fe).length) {
-      setFieldErrors(fe);
-      return;
-    }
-
     try {
-      setSaving(true);
       await api.get("/auth/csrf");
-      const payload = buildPayload();
-
-      // Intentamos PUT y caemos a PATCH
-      let saved = false;
-      const eps = activeEndpoint.current
-        ? [activeEndpoint.current]
-        : USER_DETAIL_ENDPOINTS(id);
-      for (const ep of eps) {
-        try {
-          await api.put(ep, payload);
-          activeEndpoint.current = ep;
-          saved = true;
-          break;
-        } catch (err) {
-          if (err?.response?.status === 405) {
-            try {
-              await api.patch(ep, payload);
-              activeEndpoint.current = ep;
-              saved = true;
-              break;
-            } catch (err2) {
-              // probar siguiente
-            }
-          } else {
-            // probar siguiente endpoint
-          }
-        }
-      }
-
-      if (!saved) throw new Error("No se pudo guardar en ningún endpoint.");
-
-      setOk("Usuario actualizado correctamente.");
-      // Opcional: volver a la lista tras guardar
-      // setTimeout(() => navigate("/admin/usuarios"), 600);
-    } catch (err) {
-      console.error("SAVE usuario:", err?.response?.status, err?.response?.data);
-      const data = err?.response?.data || {};
-      const fe2 = {};
-      if (data && typeof data === "object") {
-        Object.entries(data).forEach(([k, v]) => {
-          if (Array.isArray(v)) fe2[k] = v.join(" ");
-          else if (typeof v === "string") fe2[k] = v;
-        });
-      }
-      if (Object.keys(fe2).length) {
-        setFieldErrors((old) => ({ ...old, ...fe2 }));
-      } else {
-        setError(data.detail || data.error || "No se pudo guardar.");
-      }
+      await api.patch(`/api/usuarios/${id}/`, form);
+      navigate("/panel/usuarios", { replace: true });
+    } catch (e) {
+      console.error("PATCH usuario", e?.response?.status, e?.response?.data);
+      setError("No se pudieron guardar los cambios.");
     } finally {
       setSaving(false);
     }
-  };
+  }
 
   if (!isAdmin) {
     return (
       <div className={styles.wrapper}>
-        <div className={styles.card}>
-          <p className={styles.error}>Solo los administradores pueden editar usuarios.</p>
-        </div>
+        <div className={styles.card}><p className={styles.error}>Solo administradores.</p></div>
       </div>
     );
   }
@@ -234,70 +82,65 @@ export default function AdminUsuarioEdit() {
           <p className={styles.subtitle}>Modifica los datos y guarda los cambios</p>
         </header>
 
+        {error && <div className={styles.error} style={{ marginTop: 8 }}>{error}</div>}
         {loading ? (
-          <div className={styles.helper}>Cargando…</div>
+          <div className={styles.helper} style={{ marginTop: 8 }}>Cargando…</div>
         ) : (
-          <form onSubmit={handleSave} className={styles.form}>
-            <label className={styles.label}>
-              Nombre (opcional)
+          <form onSubmit={handleSubmit} style={{ display: "grid", gap: 10 }}>
+            <label>
+              <div>Nombre (opcional)</div>
               <input
                 className={styles.input}
-                name="name"
-                value={form.name}
-                onChange={onChange}
-                disabled={saving}
-                placeholder="Nombre y apellido"
+                placeholder="Nombre"
+                value={form.first_name}
+                onChange={(e) => setForm({ ...form, first_name: e.target.value })}
               />
-              {fieldErrors.name && <small className={styles.error}>{fieldErrors.name}</small>}
             </label>
-
-            <label className={styles.label}>
-              Email (login)
+            <label>
+              <div>Apellido (opcional)</div>
+              <input
+                className={styles.input}
+                placeholder="Apellido"
+                value={form.last_name}
+                onChange={(e) => setForm({ ...form, last_name: e.target.value })}
+              />
+            </label>
+            <label>
+              <div>Email (login)</div>
               <input
                 className={styles.input}
                 type="email"
-                name="email"
-                value={form.email}
-                onChange={onChange}
-                disabled={saving}
                 placeholder="correo@dominio.com"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                required
               />
-              {fieldErrors.email && <small className={styles.error}>{fieldErrors.email}</small>}
             </label>
-
-            <label className={styles.label}>
-              Rol
+            <label>
+              <div>Rol</div>
               <select
                 className={styles.select}
-                name="rol"
                 value={form.rol}
-                onChange={onChange}
-                disabled={saving}
+                onChange={(e) => setForm({ ...form, rol: e.target.value })}
               >
-                {ROLES.map((r) => (
-                  <option key={r.value} value={r.value}>{r.label}</option>
-                ))}
+                <option value="tecnico">Técnico</option>
+                <option value="administrador">Administrador</option>
               </select>
-              {fieldErrors.rol && <small className={styles.error}>{fieldErrors.rol}</small>}
-              {fieldErrors.role && <small className={styles.error}>{fieldErrors.role}</small>}
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={form.is_active}
+                onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
+              />
+              <span>Activo</span>
             </label>
 
-            {error && <div className={styles.error}>{error}</div>}
-            {ok && <div className={styles.success}>{ok}</div>}
-
-            <div className={styles.actions}>
-              <button type="submit" className={styles.button} disabled={saving || !canSave}>
-                {saving ? "Guardando…" : "Guardar cambios"}
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button className={styles.button} type="submit" disabled={saving}>
+                Guardar
               </button>
-              <button
-                type="button"
-                className={styles.button}
-                style={{ background: "#6b7280" }}
-                onClick={() => navigate(-1)}
-                disabled={saving}
-              >
-                Volver
-              </button>
+              <Link className={styles.button} to="/panel/usuarios">Cancelar</Link>
             </div>
           </form>
         )}
