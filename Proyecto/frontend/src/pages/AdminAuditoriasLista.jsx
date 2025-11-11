@@ -349,9 +349,13 @@ export default function AdminAuditoriasLista() {
                     <td style={{ padding: "10px 12px" }}>{safeStr(tecName || "—")}</td>
                     <td style={{ padding: "10px 12px" }}>{safeStr(asg.marca)}</td>
                     <td style={{ padding: "10px 12px" }}>
-                      <Link className={styles.button} to={`/admin/auditorias/${a.id}/`}>
+                      {/*<Link className={styles.button} to={`/admin/auditorias/${a.id}/`}>
                         Ver detalles
-                      </Link>
+                      </Link>*/}
+                      <a className={styles.button} href={`/panel/auditorias/${a.id}/`}>
+                        Ver detalles
+                      </a>
+
                     </td>
                   </tr>
                 );
